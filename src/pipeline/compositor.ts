@@ -188,6 +188,14 @@ async function compositeFrame(redis: Redis, message: string): Promise<void> {
     latestEc: latestEc ?? '',
   });
   await redis.set('latest:composite', timestamp);
+
+  // Notify server (WebSocket) that a new composite frame is ready
+  await redis.publish('new-frame', JSON.stringify({
+    type: 'new-frame',
+    timestamp,
+    epochMs,
+    source: 'composite',
+  }));
 }
 
 /** Parse YYYYMMDDHHMMSS timestamp to Unix epoch milliseconds */

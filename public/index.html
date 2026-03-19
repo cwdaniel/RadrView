@@ -202,10 +202,35 @@
       if (radarLayer) radarLayer.setOpacity(document.getElementById('opacity').value / 100);
     });
 
+    // WebSocket for real-time frame updates
+    function connectWebSocket() {
+      const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const ws = new WebSocket(`${wsProtocol}//${window.location.host}/ws`);
+
+      ws.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'new-frame') {
+          currentFrame = msg.timestamp;
+          document.getElementById('frame-ts').textContent = msg.timestamp;
+          document.getElementById('frame-age').textContent = '0s';
+          addRadarLayer();
+        }
+      };
+
+      ws.onclose = () => {
+        // Reconnect after 5 seconds
+        setTimeout(connectWebSocket, 5000);
+      };
+
+      ws.onerror = () => ws.close();
+    }
+
     // Init
     loadPalettes();
     fetchLatestFrame();
-    setInterval(fetchLatestFrame, 30000);
+    connectWebSocket();
+    // Fallback polling in case WebSocket disconnects
+    setInterval(fetchLatestFrame, 60000);
   </script>
 </body>
 </html>

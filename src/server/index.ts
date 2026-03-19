@@ -1,5 +1,6 @@
 import express from 'express';
 import { createServer } from 'node:http';
+import { WebSocketServer } from 'ws';
 import path from 'node:path';
 import { existsSync, readFileSync } from 'node:fs';
 import { Redis } from 'ioredis';
@@ -114,12 +115,35 @@ const isMainModule = process.argv[1]?.endsWith('server/index.js') ||
 
 if (isMainModule) {
   const redis = new Redis(config.redisUrl);
+  const subscriber = new Redis(config.redisUrl);
   const { app } = createApp(redis);
   const httpServer = createServer(app);
 
+  // WebSocket server for real-time frame notifications
+  const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
+
+  wss.on('connection', (ws) => {
+    logger.info({ clients: wss.clients.size }, 'WebSocket client connected');
+    ws.on('close', () => {
+      logger.debug({ clients: wss.clients.size }, 'WebSocket client disconnected');
+    });
+  });
+
+  // Subscribe to new-frame events from compositor and broadcast to all WS clients
+  subscriber.subscribe('new-frame');
+  subscriber.on('message', (_channel: string, message: string) => {
+    for (const client of wss.clients) {
+      if (client.readyState === 1) { // WebSocket.OPEN
+        client.send(message);
+      }
+    }
+  });
+
   const shutdown = async () => {
     logger.info('SIGTERM received, shutting down server');
+    wss.close();
     httpServer.close();
+    subscriber.disconnect();
     await redis.quit();
     process.exit(0);
   };
