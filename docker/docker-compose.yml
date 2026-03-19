@@ -72,6 +72,40 @@ services:
     depends_on:
       - redis
 
+  ingest-canada:
+    container_name: radrview-ingest-canada
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: ["node", "dist/ingest/ec.js"]
+    volumes:
+      - radar-data:/data
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - DATA_DIR=/data
+      - LOG_LEVEL=info
+    restart: unless-stopped
+    depends_on:
+      - redis
+
+  compositor:
+    container_name: radrview-compositor
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: ["node", "dist/pipeline/compositor.js"]
+    volumes:
+      - radar-data:/data
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - DATA_DIR=/data
+      - ZOOM_MIN=2
+      - ZOOM_MAX=8
+      - LOG_LEVEL=info
+    restart: unless-stopped
+    depends_on:
+      - redis
+
   redis:
     container_name: radrview-redis
     image: redis:7-alpine
