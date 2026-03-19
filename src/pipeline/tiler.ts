@@ -14,6 +14,58 @@ import type { IngestResult, TileResult } from '../types.js';
 
 const logger = createLogger('tiler');
 
+/**
+ * Bilinear interpolation sampling from source raster into a destination buffer.
+ * Reads source pixels once from memory, no disk I/O per tile.
+ */
+function sampleRegion(
+  src: Uint8Array,
+  srcW: number,
+  srcH: number,
+  srcX: number,
+  srcY: number,
+  regionW: number,
+  regionH: number,
+  dstW: number,
+  dstH: number,
+): Uint8Array {
+  const out = new Uint8Array(dstW * dstH);
+  const scaleX = regionW / dstW;
+  const scaleY = regionH / dstH;
+
+  for (let dy = 0; dy < dstH; dy++) {
+    for (let dx = 0; dx < dstW; dx++) {
+      // Map destination pixel to source coordinate
+      const fx = srcX + (dx + 0.5) * scaleX;
+      const fy = srcY + (dy + 0.5) * scaleY;
+
+      // Bilinear interpolation
+      const x0 = Math.floor(fx);
+      const y0 = Math.floor(fy);
+      const x1 = Math.min(x0 + 1, srcW - 1);
+      const y1 = Math.min(y0 + 1, srcH - 1);
+
+      if (x0 < 0 || x0 >= srcW || y0 < 0 || y0 >= srcH) continue;
+
+      const tx = fx - x0;
+      const ty = fy - y0;
+
+      const v00 = src[y0 * srcW + x0];
+      const v10 = src[y0 * srcW + x1];
+      const v01 = src[y1 * srcW + x0];
+      const v11 = src[y1 * srcW + x1];
+
+      const val = v00 * (1 - tx) * (1 - ty) +
+                  v10 * tx * (1 - ty) +
+                  v01 * (1 - tx) * ty +
+                  v11 * tx * ty;
+
+      out[dy * dstW + dx] = Math.round(val);
+    }
+  }
+  return out;
+}
+
 async function generateTiles(
   normalizedPath: string,
   outputDir: string,
@@ -22,13 +74,16 @@ async function generateTiles(
 ): Promise<{ tileCount: number; skipped: number }> {
   const info = await getRasterInfo(normalizedPath);
 
-  // Load full raster image into sharp for extract+resize operations
-  const rasterImage = sharp(normalizedPath).grayscale();
-  const rasterMeta = await rasterImage.metadata();
-  const rasterWidth = rasterMeta.width!;
-  const rasterHeight = rasterMeta.height!;
+  // Read entire raster into memory ONCE
+  const { data: rasterBuf, info: imgInfo } = await sharp(normalizedPath)
+    .grayscale()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
 
-  // Raster bounds in EPSG:3857 meters
+  const rasterData = new Uint8Array(rasterBuf.buffer, rasterBuf.byteOffset, rasterBuf.byteLength);
+  const rasterWidth = imgInfo.width;
+  const rasterHeight = imgInfo.height;
+
   const rasterLeft = info.bounds.west;
   const rasterTop = info.bounds.north;
   const rasterRight = info.bounds.east;
@@ -40,92 +95,68 @@ async function generateTiles(
   let skipped = 0;
 
   for (let z = zoomMin; z <= zoomMax; z++) {
-    const tiles = getTilesForBounds(
-      z,
-      rasterLeft,
-      rasterTop,
-      rasterRight,
-      rasterBottom,
-    );
+    const tiles = getTilesForBounds(z, rasterLeft, rasterTop, rasterRight, rasterBottom);
 
-    for (const tile of tiles) {
-      const tileBounds = tileToMercatorBounds(tile.z, tile.x, tile.y);
+    // Process tiles in parallel batches for speed
+    const BATCH = 50;
+    for (let i = 0; i < tiles.length; i += BATCH) {
+      const batch = tiles.slice(i, i + BATCH);
+      const results = await Promise.all(batch.map(async (tile) => {
+        const tileBounds = tileToMercatorBounds(tile.z, tile.x, tile.y);
+        const tileW = tileBounds.east - tileBounds.west;
+        const tileH = tileBounds.north - tileBounds.south;
 
-      const tileW = tileBounds.east - tileBounds.west;
-      const tileH = tileBounds.north - tileBounds.south;
+        const clampedWest = Math.max(tileBounds.west, rasterLeft);
+        const clampedEast = Math.min(tileBounds.east, rasterRight);
+        const clampedNorth = Math.min(tileBounds.north, rasterTop);
+        const clampedSouth = Math.max(tileBounds.south, rasterBottom);
 
-      // Clamp tile bounds to raster extent
-      const clampedWest = Math.max(tileBounds.west, rasterLeft);
-      const clampedEast = Math.min(tileBounds.east, rasterRight);
-      const clampedNorth = Math.min(tileBounds.north, rasterTop);
-      const clampedSouth = Math.max(tileBounds.south, rasterBottom);
+        if (clampedWest >= clampedEast || clampedSouth >= clampedNorth) return false;
 
-      if (clampedWest >= clampedEast || clampedSouth >= clampedNorth) {
-        skipped++;
-        continue;
-      }
+        // Source pixel coords
+        const srcXf = ((clampedWest - rasterLeft) / rasterMeterWidth) * rasterWidth;
+        const srcYf = ((rasterTop - clampedNorth) / rasterMeterHeight) * rasterHeight;
+        const srcWf = ((clampedEast - clampedWest) / rasterMeterWidth) * rasterWidth;
+        const srcHf = ((clampedNorth - clampedSouth) / rasterMeterHeight) * rasterHeight;
 
-      // Source pixel coordinates for the clamped region
-      const srcLeft = Math.floor(((clampedWest - rasterLeft) / rasterMeterWidth) * rasterWidth);
-      const srcRight = Math.ceil(((clampedEast - rasterLeft) / rasterMeterWidth) * rasterWidth);
-      const srcTop = Math.floor(((rasterTop - clampedNorth) / rasterMeterHeight) * rasterHeight);
-      const srcBottom = Math.ceil(((rasterTop - clampedSouth) / rasterMeterHeight) * rasterHeight);
+        // Destination position within 256x256 tile
+        const dstX = Math.round(((clampedWest - tileBounds.west) / tileW) * 256);
+        const dstY = Math.round(((tileBounds.north - clampedNorth) / tileH) * 256);
+        const dstW = Math.max(1, Math.round(((clampedEast - clampedWest) / tileW) * 256));
+        const dstH = Math.max(1, Math.round(((clampedNorth - clampedSouth) / tileH) * 256));
 
-      const srcW = Math.max(1, Math.min(srcRight - srcLeft, rasterWidth - srcLeft));
-      const srcH = Math.max(1, Math.min(srcBottom - srcTop, rasterHeight - srcTop));
+        // Sample from in-memory raster with bilinear interpolation
+        const region = sampleRegion(
+          rasterData, rasterWidth, rasterHeight,
+          Math.floor(srcXf), Math.floor(srcYf),
+          Math.ceil(srcWf), Math.ceil(srcHf),
+          dstW, dstH,
+        );
 
-      // Where this data sits within the 256x256 tile (pixel coordinates)
-      const dstX = Math.round(((clampedWest - tileBounds.west) / tileW) * 256);
-      const dstY = Math.round(((tileBounds.north - clampedNorth) / tileH) * 256);
-      const dstW = Math.round(((clampedEast - clampedWest) / tileW) * 256);
-      const dstH = Math.round(((clampedNorth - clampedSouth) / tileH) * 256);
-
-      if (dstW < 1 || dstH < 1) {
-        skipped++;
-        continue;
-      }
-
-      // Extract from source, resize to the proportional size
-      let regionBuffer: Buffer;
-      try {
-        regionBuffer = await sharp(normalizedPath)
-          .grayscale()
-          .extract({ left: srcLeft, top: srcTop, width: srcW, height: srcH })
-          .resize(dstW, dstH, { kernel: 'lanczos3' })
-          .raw()
-          .toBuffer();
-      } catch {
-        skipped++;
-        continue;
-      }
-
-      // Place the extracted region at the correct position in a 256x256 tile
-      const canvas = Buffer.alloc(256 * 256); // zeros = transparent/NoData
-      const region = new Uint8Array(regionBuffer.buffer, regionBuffer.byteOffset, regionBuffer.byteLength);
-
-      for (let row = 0; row < dstH && (dstY + row) < 256; row++) {
-        for (let col = 0; col < dstW && (dstX + col) < 256; col++) {
-          canvas[(dstY + row) * 256 + (dstX + col)] = region[row * dstW + col];
+        // Place on 256x256 canvas
+        const canvas = new Uint8Array(256 * 256);
+        for (let row = 0; row < dstH && (dstY + row) < 256; row++) {
+          for (let col = 0; col < dstW && (dstX + col) < 256; col++) {
+            canvas[(dstY + row) * 256 + (dstX + col)] = region[row * dstW + col];
+          }
         }
-      }
 
-      const tilePixels = new Uint8Array(canvas.buffer, canvas.byteOffset, canvas.byteLength);
+        if (isEmptyTile(canvas)) return false;
 
-      if (isEmptyTile(tilePixels)) {
-        skipped++;
-        continue;
-      }
+        const tilePath = path.join(outputDir, String(tile.z), String(tile.x), `${tile.y}.png`);
+        await mkdir(path.dirname(tilePath), { recursive: true });
 
-      const tilePath = path.join(outputDir, String(tile.z), String(tile.x), `${tile.y}.png`);
-      await mkdir(path.dirname(tilePath), { recursive: true });
+        await sharp(Buffer.from(canvas.buffer), {
+          raw: { width: 256, height: 256, channels: 1 },
+        })
+          .png({ compressionLevel: 6, palette: false })
+          .toFile(tilePath);
 
-      await sharp(Buffer.from(tilePixels), {
-        raw: { width: 256, height: 256, channels: 1 },
-      })
-        .png({ compressionLevel: 6, palette: false })
-        .toFile(tilePath);
+        return true;
+      }));
 
-      tileCount++;
+      tileCount += results.filter(Boolean).length;
+      skipped += results.filter(r => !r).length;
     }
   }
 
