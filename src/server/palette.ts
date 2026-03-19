@@ -114,11 +114,13 @@ export async function colorizeTilePng(
   grayscalePng: Buffer,
   lut: PaletteLUT,
 ): Promise<Buffer> {
+  // Force single-channel extraction — sharp may decode grayscale PNGs as RGB
   const { data, info } = await sharp(grayscalePng)
+    .grayscale()
     .raw()
     .toBuffer({ resolveWithObject: true });
 
-  const rgba = colorizeTile(data, lut);
+  const rgba = colorizeTile(new Uint8Array(data.buffer, data.byteOffset, info.width * info.height), lut);
 
   return sharp(Buffer.from(rgba), {
     raw: { width: info.width, height: info.height, channels: 4 },

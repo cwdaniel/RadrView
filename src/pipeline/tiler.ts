@@ -6,7 +6,6 @@ import { getRasterInfo } from '../utils/gdal.js';
 import {
   getTilesForBounds,
   tileToMercatorBounds,
-  extractTilePixels,
   isEmptyTile,
 } from '../utils/geo.js';
 import { config } from '../config/env.js';
@@ -21,13 +20,21 @@ async function generateTiles(
   zoomMin: number,
   zoomMax: number,
 ): Promise<{ tileCount: number; skipped: number }> {
-  // Get raster metadata via gdalinfo CLI
   const info = await getRasterInfo(normalizedPath);
 
-  // Read raster pixels via sharp (normalized GeoTIFF is single-band byte)
-  const { data: rasterData, info: imgInfo } = await sharp(normalizedPath)
-    .raw()
-    .toBuffer({ resolveWithObject: true });
+  // Load full raster image into sharp for extract+resize operations
+  const rasterImage = sharp(normalizedPath).grayscale();
+  const rasterMeta = await rasterImage.metadata();
+  const rasterWidth = rasterMeta.width!;
+  const rasterHeight = rasterMeta.height!;
+
+  // Raster bounds in EPSG:3857 meters
+  const rasterLeft = info.bounds.west;
+  const rasterTop = info.bounds.north;
+  const rasterRight = info.bounds.east;
+  const rasterBottom = info.bounds.south;
+  const rasterMeterWidth = rasterRight - rasterLeft;
+  const rasterMeterHeight = rasterTop - rasterBottom;
 
   let tileCount = 0;
   let skipped = 0;
@@ -35,27 +42,51 @@ async function generateTiles(
   for (let z = zoomMin; z <= zoomMax; z++) {
     const tiles = getTilesForBounds(
       z,
-      info.bounds.west,
-      info.bounds.north,
-      info.bounds.east,
-      info.bounds.south,
+      rasterLeft,
+      rasterTop,
+      rasterRight,
+      rasterBottom,
     );
 
     for (const tile of tiles) {
       const tileBounds = tileToMercatorBounds(tile.z, tile.x, tile.y);
 
-      const tilePixels = extractTilePixels(
-        rasterData,
-        imgInfo.width,
-        imgInfo.height,
-        info.bounds.west,
-        info.bounds.north,
-        info.geoTransform[1],
-        info.geoTransform[5],
-        tileBounds,
-        256,
-        256,
-      );
+      // Calculate which pixel region of the source raster corresponds to this tile
+      // Clamp tile bounds to raster extent
+      const clampedWest = Math.max(tileBounds.west, rasterLeft);
+      const clampedEast = Math.min(tileBounds.east, rasterRight);
+      const clampedNorth = Math.min(tileBounds.north, rasterTop);
+      const clampedSouth = Math.max(tileBounds.south, rasterBottom);
+
+      if (clampedWest >= clampedEast || clampedSouth >= clampedNorth) {
+        skipped++;
+        continue;
+      }
+
+      // Convert meter bounds to pixel coordinates in the source raster
+      const srcLeft = Math.floor(((clampedWest - rasterLeft) / rasterMeterWidth) * rasterWidth);
+      const srcRight = Math.ceil(((clampedEast - rasterLeft) / rasterMeterWidth) * rasterWidth);
+      const srcTop = Math.floor(((rasterTop - clampedNorth) / rasterMeterHeight) * rasterHeight);
+      const srcBottom = Math.ceil(((rasterTop - clampedSouth) / rasterMeterHeight) * rasterHeight);
+
+      const srcW = Math.max(1, srcRight - srcLeft);
+      const srcH = Math.max(1, srcBottom - srcTop);
+
+      // Extract the region and resize to 256x256 using lanczos3 resampling
+      let tileBuffer: Buffer;
+      try {
+        tileBuffer = await sharp(normalizedPath)
+          .grayscale()
+          .extract({ left: srcLeft, top: srcTop, width: srcW, height: srcH })
+          .resize(256, 256, { kernel: 'lanczos3' })
+          .raw()
+          .toBuffer();
+      } catch {
+        skipped++;
+        continue;
+      }
+
+      const tilePixels = new Uint8Array(tileBuffer.buffer, tileBuffer.byteOffset, tileBuffer.byteLength);
 
       if (isEmptyTile(tilePixels)) {
         skipped++;
@@ -112,12 +143,9 @@ async function main() {
 
   logger.info('Tiler worker started, polling queue for frames');
 
-  // Process queue sequentially — no frames dropped
-  // Uses BLPOP for efficient blocking instead of polling with sleep
   while (running) {
-    // BLPOP with 5-second timeout so we can check the running flag
     const result = await redis.blpop(QUEUE_KEY, 5);
-    if (!result) continue; // timeout, check running flag
+    if (!result) continue;
 
     const [, message] = result;
     await processFrame(redis, message);
