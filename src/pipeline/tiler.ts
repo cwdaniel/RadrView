@@ -166,7 +166,7 @@ async function processFrame(redis: Redis, message: string) {
       skipped,
       bounds,
     };
-    await redis.publish('new-tiles', JSON.stringify(tileResult));
+    await redis.rpush('queue:composite', JSON.stringify(tileResult));
 
     await unlink(normalizedPath).catch(() => {});
   } catch (error) {
