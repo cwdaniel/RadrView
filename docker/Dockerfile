@@ -23,6 +23,7 @@ RUN pnpm install --frozen-lockfile
 # Copy source and build
 COPY tsconfig.json ./
 COPY src/ ./src/
+COPY palettes/ ./palettes/
 RUN pnpm build
 
 CMD ["node", "dist/server/index.js"]
