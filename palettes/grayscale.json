@@ -1,0 +1,8 @@
+{
+  "name": "grayscale",
+  "description": "Raw dBZ as grayscale intensity",
+  "stops": [
+    { "dbz": -10, "color": [10, 10, 10, 255] },
+    { "dbz": 80, "color": [255, 255, 255, 255] }
+  ]
+}
