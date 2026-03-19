@@ -168,7 +168,8 @@
 
       radarLayer = L.tileLayer(`${API}/tile/${currentFrame}/{z}/{x}/{y}?palette=${palette}&source=${source}`, {
         opacity,
-        maxZoom: 8,
+        maxNativeZoom: 8,
+        maxZoom: 19,
         minZoom: 2,
         tileSize: 256,
         attribution: 'RadrView',
