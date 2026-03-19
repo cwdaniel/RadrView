@@ -2,10 +2,10 @@ import { describe, it, expect } from 'vitest';
 import { parseS3ListResponse, buildListUrl, buildFileUrl } from '../../src/utils/s3.js';
 
 describe('buildListUrl', () => {
-  it('constructs correct S3 list URL', () => {
+  it('constructs correct S3 list URL with default max-keys', () => {
     const url = buildListUrl('CONUS/SeamlessHSR_00.00/');
     expect(url).toBe(
-      'https://noaa-mrms-pds.s3.amazonaws.com/?list-type=2&prefix=CONUS/SeamlessHSR_00.00/'
+      'https://noaa-mrms-pds.s3.amazonaws.com/?list-type=2&prefix=CONUS/SeamlessHSR_00.00/&max-keys=20'
     );
   });
 });

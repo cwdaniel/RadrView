@@ -1,5 +1,8 @@
+name: radrview
+
 services:
   ingest-mrms:
+    container_name: radrview-ingest-mrms
     build:
       context: ..
       dockerfile: docker/Dockerfile
@@ -16,6 +19,7 @@ services:
       - redis
 
   tiler:
+    container_name: radrview-tiler
     build:
       context: ..
       dockerfile: docker/Dockerfile
@@ -33,6 +37,7 @@ services:
       - redis
 
   server:
+    container_name: radrview-server
     build:
       context: ..
       dockerfile: docker/Dockerfile
@@ -51,6 +56,7 @@ services:
       - redis
 
   cleanup:
+    container_name: radrview-cleanup
     build:
       context: ..
       dockerfile: docker/Dockerfile
@@ -67,6 +73,7 @@ services:
       - redis
 
   redis:
+    container_name: radrview-redis
     image: redis:7-alpine
     volumes:
       - redis-data:/data

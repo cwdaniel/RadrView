@@ -94,90 +94,84 @@ async function cleanupPartialDirs(redis: Redis) {
   }
 }
 
+const QUEUE_KEY = 'queue:normalize';
+
 async function main() {
   const redis = new Redis(config.redisUrl);
-  const subscriber = new Redis(config.redisUrl);
 
   await cleanupPartialDirs(redis);
 
-  let processing = false;
+  let running = true;
 
   const shutdown = async () => {
     logger.info('SIGTERM received, finishing current tile generation...');
-    subscriber.disconnect();
-    while (processing) {
-      await new Promise(resolve => setTimeout(resolve, 100));
-    }
-    await redis.quit();
-    process.exit(0);
+    running = false;
   };
   process.on('SIGTERM', shutdown);
   process.on('SIGINT', shutdown);
 
-  await subscriber.subscribe('new-normalized');
-  logger.info('Tiler worker started, listening for new-normalized events');
+  logger.info('Tiler worker started, polling queue for frames');
 
-  subscriber.on('message', (_channel: string, message: string) => {
-    handleMessage(redis, message).catch(err => {
-      logger.error({ err }, 'Unhandled error in message handler');
-      processing = false;
+  // Process queue sequentially — no frames dropped
+  // Uses BLPOP for efficient blocking instead of polling with sleep
+  while (running) {
+    // BLPOP with 5-second timeout so we can check the running flag
+    const result = await redis.blpop(QUEUE_KEY, 5);
+    if (!result) continue; // timeout, check running flag
+
+    const [, message] = result;
+    await processFrame(redis, message);
+  }
+
+  await redis.quit();
+  process.exit(0);
+}
+
+async function processFrame(redis: Redis, message: string) {
+  const result: IngestResult = JSON.parse(message);
+  const { source, timestamp, epochMs, normalizedPath, bounds } = result;
+
+  logger.info({ source, timestamp }, 'Tiling new frame');
+  const start = Date.now();
+
+  const outputDir = path.join(config.dataDir, 'tiles', source, timestamp);
+
+  try {
+    const { tileCount, skipped } = await generateTiles(
+      normalizedPath,
+      outputDir,
+      config.zoomMin,
+      config.zoomMax,
+    );
+
+    const durationMs = Date.now() - start;
+    logger.info({ source, timestamp, tileCount, skipped, durationMs }, 'Tiling complete');
+
+    await redis.zadd(`frames:${source}`, epochMs, timestamp);
+    await redis.hset(`frame:${timestamp}`, {
+      source,
+      epochMs: String(epochMs),
+      tileCount: String(tileCount),
+      zoomMin: String(config.zoomMin),
+      zoomMax: String(config.zoomMax),
     });
-  });
+    await redis.set(`latest:${source}`, timestamp);
 
-  async function handleMessage(redis: Redis, message: string) {
-    if (processing) {
-      logger.warn('Already processing a frame, skipping');
-      return;
-    }
+    const tileResult: TileResult = {
+      source,
+      timestamp,
+      epochMs,
+      tileDir: outputDir,
+      tileCount,
+      skipped,
+      bounds,
+    };
+    await redis.publish('new-tiles', JSON.stringify(tileResult));
 
-    processing = true;
-    const result: IngestResult = JSON.parse(message);
-    const { source, timestamp, epochMs, normalizedPath, bounds } = result;
-
-    logger.info({ source, timestamp }, 'Tiling new frame');
-    const start = Date.now();
-
-    const outputDir = path.join(config.dataDir, 'tiles', source, timestamp);
-
-    try {
-      const { tileCount, skipped } = await generateTiles(
-        normalizedPath,
-        outputDir,
-        config.zoomMin,
-        config.zoomMax,
-      );
-
-      const durationMs = Date.now() - start;
-      logger.info({ source, timestamp, tileCount, skipped, durationMs }, 'Tiling complete');
-
-      await redis.zadd(`frames:${source}`, epochMs, timestamp);
-      await redis.hset(`frame:${timestamp}`, {
-        source,
-        epochMs: String(epochMs),
-        tileCount: String(tileCount),
-        zoomMin: String(config.zoomMin),
-        zoomMax: String(config.zoomMax),
-      });
-      await redis.set(`latest:${source}`, timestamp);
-
-      const tileResult: TileResult = {
-        source,
-        timestamp,
-        epochMs,
-        tileDir: outputDir,
-        tileCount,
-        skipped,
-        bounds,
-      };
-      await redis.publish('new-tiles', JSON.stringify(tileResult));
-
-      await unlink(normalizedPath).catch(() => {});
-    } catch (error) {
-      logger.error({ error, source, timestamp }, 'Tile generation failed');
-      await rm(outputDir, { recursive: true, force: true }).catch(() => {});
-    } finally {
-      processing = false;
-    }
+    await unlink(normalizedPath).catch(() => {});
+  } catch (error) {
+    logger.error({ err: error, source, timestamp }, 'Tile generation failed');
+    await rm(outputDir, { recursive: true, force: true }).catch(() => {});
   }
 }
 

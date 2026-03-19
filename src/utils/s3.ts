@@ -8,8 +8,8 @@ import path from 'node:path';
 
 const S3_BASE = 'https://noaa-mrms-pds.s3.amazonaws.com';
 
-export function buildListUrl(prefix: string): string {
-  return `${S3_BASE}/?list-type=2&prefix=${prefix}`;
+export function buildListUrl(prefix: string, maxKeys: number = 20): string {
+  return `${S3_BASE}/?list-type=2&prefix=${prefix}&max-keys=${maxKeys}`;
 }
 
 export function buildFileUrl(key: string): string {

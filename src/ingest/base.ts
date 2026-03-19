@@ -46,9 +46,9 @@ export abstract class BaseIngester {
           if (results.length > 0) {
             consecutiveErrors = 0;
             for (const result of results) {
-              // Publish to tiler — do NOT write to frames:* here.
+              // Push to reliable queue for the tiler.
               // The tiler writes frames:* after tiles are generated.
-              await this.redis.publish('new-normalized', JSON.stringify(result));
+              await this.redis.rpush('queue:normalize', JSON.stringify(result));
             }
             await this.redis.hset(`source:${this.source}`, 'lastSuccess', Date.now());
             await this.redis.hset(`source:${this.source}`, 'consecutiveErrors', 0);

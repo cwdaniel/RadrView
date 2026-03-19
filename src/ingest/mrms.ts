@@ -9,19 +9,35 @@ import { SOURCES } from '../config/sources.js';
 import type { IngestResult } from '../types.js';
 
 const SOURCE = SOURCES.mrms;
-const S3_PREFIX = `CONUS/${SOURCE.product}/`;
+const BASE_PREFIX = `CONUS/${SOURCE.product}/`;
+
+function getDatePrefixes(): string[] {
+  // List today's and yesterday's directories to catch recent files
+  const now = new Date();
+  const today = now.toISOString().slice(0, 10).replace(/-/g, '');
+  const yesterday = new Date(now.getTime() - 86400000).toISOString().slice(0, 10).replace(/-/g, '');
+  return [
+    `${BASE_PREFIX}${today}/`,
+    `${BASE_PREFIX}${yesterday}/`,
+  ];
+}
 
 export class MrmsIngester extends BaseIngester {
   readonly source = 'mrms';
   readonly pollIntervalMs = SOURCE.pollIntervalMs;
 
   async poll(): Promise<IngestResult[]> {
-    // 1. List recent files
-    const keys = await listObjects(S3_PREFIX);
-    this.logger.debug({ count: keys.length }, 'Listed S3 objects');
+    // 1. List recent files from today's and yesterday's directories
+    const prefixes = getDatePrefixes();
+    const allKeys: string[] = [];
+    for (const prefix of prefixes) {
+      const keys = await listObjects(prefix);
+      allKeys.push(...keys);
+    }
+    this.logger.debug({ count: allKeys.length }, 'Listed S3 objects');
 
     // 2. Filter to .grib2.gz files and sort by timestamp (newest first)
-    const gribKeys = keys
+    const gribKeys = allKeys
       .filter(k => k.endsWith('.grib2.gz'))
       .sort()
       .reverse()
