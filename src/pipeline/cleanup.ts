@@ -12,7 +12,7 @@ export function getCleanupCutoffMs(retentionHours: number, now: number = Date.no
 
 async function cleanup(redis: Redis): Promise<void> {
   const cutoffMs = getCleanupCutoffMs(config.retentionHours);
-  const sources = ['mrms'];
+  const sources = ['mrms', 'ec', 'composite'];
 
   for (const source of sources) {
     const oldFrames = await redis.zrangebyscore(`frames:${source}`, 0, cutoffMs);
