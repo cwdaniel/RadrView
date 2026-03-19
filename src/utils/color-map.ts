@@ -22,7 +22,7 @@ const EC_COLOR_TABLE: ColorEntry[] = [
   { rgb: [255, 0, 255], dbz: 60 },
   { rgb: [144, 0, 255], dbz: 65 },
   { rgb: [255, 255, 255], dbz: 70 },
-].map(e => ({ ...e, pixel: dbzToPixel(e.dbz) }));
+].map(e => ({ ...e, pixel: dbzToPixel(e.dbz) })) as ColorEntry[];
 
 export function findNearestDbz(r: number, g: number, b: number): number {
   let bestDist = Infinity;
