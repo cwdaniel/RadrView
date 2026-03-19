@@ -13,6 +13,6 @@ export const SOURCES: Record<string, SourceConfig> = {
     bounds: { west: -141, south: 41, east: -52, north: 84 },
     priority: 1,
     pollIntervalMs: 60_000,
-    product: 'RADAR_1KM_RDBR',
+    product: 'RADAR_1KM_RRAI',
   },
 };

@@ -8,7 +8,7 @@ export function buildGetCapabilitiesUrl(layer: string): string {
     SERVICE: 'WMS',
     VERSION: '1.3.0',
     REQUEST: 'GetCapabilities',
-    LAYERS: layer,
+    LAYER: layer,
   });
   return `${WMS_BASE}?${params}`;
 }

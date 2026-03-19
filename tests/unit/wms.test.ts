@@ -50,6 +50,6 @@ describe('buildGetCapabilitiesUrl', () => {
   it('constructs correct URL', () => {
     const url = buildGetCapabilitiesUrl('RADAR_1KM_RDBR');
     expect(url).toContain('REQUEST=GetCapabilities');
-    expect(url).toContain('LAYERS=RADAR_1KM_RDBR');
+    expect(url).toContain('LAYER=RADAR_1KM_RDBR');
   });
 });
