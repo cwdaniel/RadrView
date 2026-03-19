@@ -114,6 +114,7 @@
     </div>
 
     <div class="status">
+      <div>Live: <span class="value" id="ws-status" style="color:#f44">disconnected</span></div>
       <div>Frame: <span class="value" id="frame-ts">--</span></div>
       <div>Age: <span class="value" id="frame-age">--</span></div>
       <div>Tiles: <span class="value" id="tile-count">--</span></div>
@@ -203,9 +204,15 @@
     });
 
     // WebSocket for real-time frame updates
+    const wsStatus = document.getElementById('ws-status');
     function connectWebSocket() {
       const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const ws = new WebSocket(`${wsProtocol}//${window.location.host}/ws`);
+
+      ws.onopen = () => {
+        wsStatus.textContent = 'connected';
+        wsStatus.style.color = '#4f4';
+      };
 
       ws.onmessage = (event) => {
         const msg = JSON.parse(event.data);
@@ -213,12 +220,20 @@
           currentFrame = msg.timestamp;
           document.getElementById('frame-ts').textContent = msg.timestamp;
           document.getElementById('frame-age').textContent = '0s';
+          // Flash the status to show a live update arrived
+          wsStatus.textContent = 'new frame!';
+          wsStatus.style.color = '#ff0';
+          setTimeout(() => {
+            wsStatus.textContent = 'connected';
+            wsStatus.style.color = '#4f4';
+          }, 2000);
           addRadarLayer();
         }
       };
 
       ws.onclose = () => {
-        // Reconnect after 5 seconds
+        wsStatus.textContent = 'reconnecting...';
+        wsStatus.style.color = '#f44';
         setTimeout(connectWebSocket, 5000);
       };
 
