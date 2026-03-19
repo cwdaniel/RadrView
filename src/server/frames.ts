@@ -5,7 +5,7 @@ export function createFramesRouter(redis: Redis): Router {
   const router = Router();
 
   router.get('/frames', async (req, res) => {
-    const source = (req.query.source as string) || 'mrms';
+    const source = (req.query.source as string) || 'composite';
     const limit = Math.min(parseInt(req.query.limit as string) || 720, 2000);
     const since = req.query.since ? parseInt(req.query.since as string) : 0;
 
@@ -34,7 +34,7 @@ export function createFramesRouter(redis: Redis): Router {
   });
 
   router.get('/frames/latest', async (req, res) => {
-    const source = (req.query.source as string) || 'mrms';
+    const source = (req.query.source as string) || 'composite';
     const latest = await redis.get(`latest:${source}`);
 
     if (!latest) {

@@ -42,6 +42,7 @@ export function createApp(redis: Redis): { app: ReturnType<typeof express> } {
   app.get('/tile/:timestamp/:z/:x/:y', async (req, res) => {
     const { timestamp, z, x, y } = req.params;
     const paletteName = (req.query.palette as string) || 'default';
+    const source = (req.query.source as string) || 'composite';
 
     const lut = getLUT(paletteName);
     if (!lut) {
@@ -49,7 +50,7 @@ export function createApp(redis: Redis): { app: ReturnType<typeof express> } {
       return;
     }
 
-    const cacheKey = `${paletteName}/${timestamp}/${z}/${x}/${y}`;
+    const cacheKey = `${paletteName}/${source}/${timestamp}/${z}/${x}/${y}`;
 
     const cached = tileCache.get(cacheKey);
     if (cached) {
@@ -61,7 +62,7 @@ export function createApp(redis: Redis): { app: ReturnType<typeof express> } {
     }
 
     const tilePath = path.join(
-      config.dataDir, 'tiles', 'mrms', timestamp, z, x, `${y}.png`,
+      config.dataDir, 'tiles', source, timestamp, z, x, `${y}.png`,
     );
 
     if (!existsSync(tilePath)) {
@@ -89,7 +90,7 @@ async function setCacheHeaders(
   timestamp: string,
   redis: Redis,
 ): Promise<void> {
-  const latest = await redis.get('latest:mrms');
+  const latest = await redis.get('latest:composite');
   if (timestamp === latest) {
     res.setHeader('Cache-Control', 'public, max-age=60');
   } else {
