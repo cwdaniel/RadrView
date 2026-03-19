@@ -51,7 +51,9 @@ async function generateTiles(
     for (const tile of tiles) {
       const tileBounds = tileToMercatorBounds(tile.z, tile.x, tile.y);
 
-      // Calculate which pixel region of the source raster corresponds to this tile
+      const tileW = tileBounds.east - tileBounds.west;
+      const tileH = tileBounds.north - tileBounds.south;
+
       // Clamp tile bounds to raster extent
       const clampedWest = Math.max(tileBounds.west, rasterLeft);
       const clampedEast = Math.min(tileBounds.east, rasterRight);
@@ -63,22 +65,33 @@ async function generateTiles(
         continue;
       }
 
-      // Convert meter bounds to pixel coordinates in the source raster
+      // Source pixel coordinates for the clamped region
       const srcLeft = Math.floor(((clampedWest - rasterLeft) / rasterMeterWidth) * rasterWidth);
       const srcRight = Math.ceil(((clampedEast - rasterLeft) / rasterMeterWidth) * rasterWidth);
       const srcTop = Math.floor(((rasterTop - clampedNorth) / rasterMeterHeight) * rasterHeight);
       const srcBottom = Math.ceil(((rasterTop - clampedSouth) / rasterMeterHeight) * rasterHeight);
 
-      const srcW = Math.max(1, srcRight - srcLeft);
-      const srcH = Math.max(1, srcBottom - srcTop);
+      const srcW = Math.max(1, Math.min(srcRight - srcLeft, rasterWidth - srcLeft));
+      const srcH = Math.max(1, Math.min(srcBottom - srcTop, rasterHeight - srcTop));
 
-      // Extract the region and resize to 256x256 using lanczos3 resampling
-      let tileBuffer: Buffer;
+      // Where this data sits within the 256x256 tile (pixel coordinates)
+      const dstX = Math.round(((clampedWest - tileBounds.west) / tileW) * 256);
+      const dstY = Math.round(((tileBounds.north - clampedNorth) / tileH) * 256);
+      const dstW = Math.round(((clampedEast - clampedWest) / tileW) * 256);
+      const dstH = Math.round(((clampedNorth - clampedSouth) / tileH) * 256);
+
+      if (dstW < 1 || dstH < 1) {
+        skipped++;
+        continue;
+      }
+
+      // Extract from source, resize to the proportional size
+      let regionBuffer: Buffer;
       try {
-        tileBuffer = await sharp(normalizedPath)
+        regionBuffer = await sharp(normalizedPath)
           .grayscale()
           .extract({ left: srcLeft, top: srcTop, width: srcW, height: srcH })
-          .resize(256, 256, { kernel: 'lanczos3' })
+          .resize(dstW, dstH, { kernel: 'lanczos3' })
           .raw()
           .toBuffer();
       } catch {
@@ -86,7 +99,17 @@ async function generateTiles(
         continue;
       }
 
-      const tilePixels = new Uint8Array(tileBuffer.buffer, tileBuffer.byteOffset, tileBuffer.byteLength);
+      // Place the extracted region at the correct position in a 256x256 tile
+      const canvas = Buffer.alloc(256 * 256); // zeros = transparent/NoData
+      const region = new Uint8Array(regionBuffer.buffer, regionBuffer.byteOffset, regionBuffer.byteLength);
+
+      for (let row = 0; row < dstH && (dstY + row) < 256; row++) {
+        for (let col = 0; col < dstW && (dstX + col) < 256; col++) {
+          canvas[(dstY + row) * 256 + (dstX + col)] = region[row * dstW + col];
+        }
+      }
+
+      const tilePixels = new Uint8Array(canvas.buffer, canvas.byteOffset, canvas.byteLength);
 
       if (isEmptyTile(tilePixels)) {
         skipped++;
