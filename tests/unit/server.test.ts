@@ -88,4 +88,36 @@ describe('Tile Server', () => {
       expect(res.headers['content-type']).toMatch(/image\/png/);
     });
   });
+
+  describe('GET /tile with palette', () => {
+    it('returns 400 for unknown palette', async () => {
+      const res = await request(app).get('/tile/20260318143200/4/3/5?palette=nonexistent');
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/palette/i);
+    });
+  });
+
+  describe('GET /palettes', () => {
+    it('returns palette list', async () => {
+      const res = await request(app).get('/palettes');
+      expect(res.status).toBe(200);
+      expect(res.body.palettes).toBeInstanceOf(Array);
+      expect(res.body.palettes.length).toBeGreaterThan(0);
+      expect(res.body.palettes[0]).toHaveProperty('name');
+      expect(res.body.palettes[0]).toHaveProperty('description');
+    });
+  });
+
+  describe('GET /palette/:name/legend', () => {
+    it('returns PNG for valid palette', async () => {
+      const res = await request(app).get('/palette/default/legend');
+      expect(res.status).toBe(200);
+      expect(res.headers['content-type']).toMatch(/image\/png/);
+    });
+
+    it('returns 404 for unknown palette', async () => {
+      const res = await request(app).get('/palette/nonexistent/legend');
+      expect(res.status).toBe(404);
+    });
+  });
 });

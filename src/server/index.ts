@@ -8,6 +8,7 @@ import { config } from '../config/env.js';
 import { createLogger } from '../utils/logger.js';
 import { createFramesRouter } from './frames.js';
 import { createHealthRouter } from './health.js';
+import { loadPalettes, getLUT, colorizeTilePng, createPaletteRouter } from './palette.js';
 
 const logger = createLogger('server');
 
@@ -28,16 +29,28 @@ export function createApp(redis: Redis): { app: ReturnType<typeof express> } {
     ttl: 120_000,
   });
 
+  // Load palettes
+  const palettesDir = path.join(process.cwd(), 'palettes');
+  loadPalettes(palettesDir);
+
   // Mount routers
   app.use(createFramesRouter(redis));
   app.use(createHealthRouter(redis));
+  app.use(createPaletteRouter());
 
   // Tile endpoint
   app.get('/tile/:timestamp/:z/:x/:y', async (req, res) => {
     const { timestamp, z, x, y } = req.params;
-    const cacheKey = `${timestamp}/${z}/${x}/${y}`;
+    const paletteName = (req.query.palette as string) || 'default';
 
-    // Check cache
+    const lut = getLUT(paletteName);
+    if (!lut) {
+      res.status(400).json({ error: `Unknown palette: ${paletteName}` });
+      return;
+    }
+
+    const cacheKey = `${paletteName}/${timestamp}/${z}/${x}/${y}`;
+
     const cached = tileCache.get(cacheKey);
     if (cached) {
       res.setHeader('Content-Type', 'image/png');
@@ -47,7 +60,6 @@ export function createApp(redis: Redis): { app: ReturnType<typeof express> } {
       return;
     }
 
-    // Read from disk
     const tilePath = path.join(
       config.dataDir, 'tiles', 'mrms', timestamp, z, x, `${y}.png`,
     );
@@ -59,13 +71,14 @@ export function createApp(redis: Redis): { app: ReturnType<typeof express> } {
       return;
     }
 
-    const tileBuffer = readFileSync(tilePath);
-    tileCache.set(cacheKey, tileBuffer);
+    const grayscalePng = readFileSync(tilePath);
+    const colorized = await colorizeTilePng(grayscalePng, lut);
+    tileCache.set(cacheKey, colorized);
 
     res.setHeader('Content-Type', 'image/png');
     res.setHeader('X-Cache', 'miss');
     await setCacheHeaders(res, timestamp, redis);
-    res.send(tileBuffer);
+    res.send(colorized);
   });
 
   return { app };
