@@ -76,7 +76,6 @@ async function generateTiles(
 }
 
 async function cleanupPartialDirs(redis: Redis) {
-  // Remove tile directories not registered in Redis (leftover from interrupted processing)
   const tilesDir = path.join(config.dataDir, 'tiles', 'mrms');
   try {
     const dirs = await readdir(tilesDir).catch(() => [] as string[]);
@@ -88,7 +87,7 @@ async function cleanupPartialDirs(redis: Redis) {
       }
     }
   } catch {
-    // tilesDir may not exist yet — that's fine
+    // tilesDir may not exist yet
   }
 }
 
@@ -96,7 +95,6 @@ async function main() {
   const redis = new Redis(config.redisUrl);
   const subscriber = new Redis(config.redisUrl);
 
-  // Clean up any partial tile directories from previous interrupted runs
   await cleanupPartialDirs(redis);
 
   let processing = false;
@@ -104,7 +102,6 @@ async function main() {
   const shutdown = async () => {
     logger.info('SIGTERM received, finishing current tile generation...');
     subscriber.disconnect();
-    // Wait for current processing to finish
     while (processing) {
       await new Promise(resolve => setTimeout(resolve, 100));
     }
@@ -117,7 +114,14 @@ async function main() {
   await subscriber.subscribe('new-normalized');
   logger.info('Tiler worker started, listening for new-normalized events');
 
-  subscriber.on('message', async (_channel: string, message: string) => {
+  subscriber.on('message', (_channel: string, message: string) => {
+    handleMessage(redis, message).catch(err => {
+      logger.error({ err }, 'Unhandled error in message handler');
+      processing = false;
+    });
+  });
+
+  async function handleMessage(redis: Redis, message: string) {
     if (processing) {
       logger.warn('Already processing a frame, skipping');
       return;
@@ -143,7 +147,6 @@ async function main() {
       const durationMs = Date.now() - start;
       logger.info({ source, timestamp, tileCount, skipped, durationMs }, 'Tiling complete');
 
-      // Record in Redis
       await redis.zadd(`frames:${source}`, epochMs, timestamp);
       await redis.hset(`frame:${timestamp}`, {
         source,
@@ -154,7 +157,6 @@ async function main() {
       });
       await redis.set(`latest:${source}`, timestamp);
 
-      // Notify downstream
       const tileResult: TileResult = {
         source,
         timestamp,
@@ -166,16 +168,14 @@ async function main() {
       };
       await redis.publish('new-tiles', JSON.stringify(tileResult));
 
-      // Clean up normalized file
       await unlink(normalizedPath).catch(() => {});
     } catch (error) {
       logger.error({ error, source, timestamp }, 'Tile generation failed');
-      // Clean up partial output
       await rm(outputDir, { recursive: true, force: true }).catch(() => {});
     } finally {
       processing = false;
     }
-  });
+  }
 }
 
 main().catch(err => {
