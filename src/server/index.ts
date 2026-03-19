@@ -1,0 +1,108 @@
+import express from 'express';
+import { createServer } from 'node:http';
+import path from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { Redis } from 'ioredis';
+import { LRUCache } from 'lru-cache';
+import { config } from '../config/env.js';
+import { createLogger } from '../utils/logger.js';
+import { createFramesRouter } from './frames.js';
+import { createHealthRouter } from './health.js';
+
+const logger = createLogger('server');
+
+// 1x1 transparent PNG (68 bytes)
+const TRANSPARENT_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQAB' +
+  'Nl7BcQAAAABJRU5ErkJggg==',
+  'base64',
+);
+
+export function createApp(redis: Redis) {
+  const app = express();
+
+  const tileCache = new LRUCache<string, Buffer>({
+    max: 10_000,
+    maxSize: 200_000_000,
+    sizeCalculation: (buf) => buf.length,
+    ttl: 120_000,
+  });
+
+  // Mount routers
+  app.use(createFramesRouter(redis));
+  app.use(createHealthRouter(redis));
+
+  // Tile endpoint
+  app.get('/tile/:timestamp/:z/:x/:y', async (req, res) => {
+    const { timestamp, z, x, y } = req.params;
+    const cacheKey = `${timestamp}/${z}/${x}/${y}`;
+
+    // Check cache
+    const cached = tileCache.get(cacheKey);
+    if (cached) {
+      res.setHeader('Content-Type', 'image/png');
+      res.setHeader('X-Cache', 'hit');
+      await setCacheHeaders(res, timestamp, redis);
+      res.send(cached);
+      return;
+    }
+
+    // Read from disk
+    const tilePath = path.join(
+      config.dataDir, 'tiles', 'mrms', timestamp, z, x, `${y}.png`,
+    );
+
+    if (!existsSync(tilePath)) {
+      res.setHeader('Content-Type', 'image/png');
+      await setCacheHeaders(res, timestamp, redis);
+      res.send(TRANSPARENT_PNG);
+      return;
+    }
+
+    const tileBuffer = readFileSync(tilePath);
+    tileCache.set(cacheKey, tileBuffer);
+
+    res.setHeader('Content-Type', 'image/png');
+    res.setHeader('X-Cache', 'miss');
+    await setCacheHeaders(res, timestamp, redis);
+    res.send(tileBuffer);
+  });
+
+  return { app };
+}
+
+async function setCacheHeaders(
+  res: express.Response,
+  timestamp: string,
+  redis: Redis,
+): Promise<void> {
+  const latest = await redis.get('latest:mrms');
+  if (timestamp === latest) {
+    res.setHeader('Cache-Control', 'public, max-age=60');
+  } else {
+    res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
+  }
+}
+
+// Only start listening when run directly (not imported for testing)
+const isMainModule = process.argv[1]?.endsWith('server/index.js') ||
+  process.argv[1]?.endsWith('server/index.ts');
+
+if (isMainModule) {
+  const redis = new Redis(config.redisUrl);
+  const { app } = createApp(redis);
+  const httpServer = createServer(app);
+
+  const shutdown = async () => {
+    logger.info('SIGTERM received, shutting down server');
+    httpServer.close();
+    await redis.quit();
+    process.exit(0);
+  };
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
+
+  httpServer.listen(config.port, () => {
+    logger.info({ port: config.port }, 'RadrView tile server listening');
+  });
+}
