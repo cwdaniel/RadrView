@@ -29,9 +29,19 @@ export function createApp(redis: Redis): { app: ReturnType<typeof express> } {
     ttl: 120_000,
   });
 
+  // CORS
+  app.use((_req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    next();
+  });
+
   // Load palettes
   const palettesDir = path.join(process.cwd(), 'palettes');
   loadPalettes(palettesDir);
+
+  // Serve static viewer
+  const publicDir = path.join(process.cwd(), 'public');
+  app.use(express.static(publicDir));
 
   // Mount routers
   app.use(createFramesRouter(redis));

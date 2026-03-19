@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RadrView</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #1a1a2e; }
+    #map { width: 100vw; height: 100vh; }
+    .controls {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      z-index: 1000;
+      background: rgba(26, 26, 46, 0.92);
+      border-radius: 10px;
+      padding: 14px 16px;
+      color: #e0e0e0;
+      font-size: 13px;
+      min-width: 200px;
+      backdrop-filter: blur(8px);
+      border: 1px solid rgba(255,255,255,0.08);
+      box-shadow: 0 4px 24px rgba(0,0,0,0.4);
+    }
+    .controls h3 {
+      margin: 0 0 10px 0;
+      font-size: 15px;
+      font-weight: 600;
+      color: #fff;
+      letter-spacing: 0.5px;
+    }
+    .controls label {
+      display: block;
+      margin: 8px 0 4px;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: #888;
+    }
+    .controls select {
+      width: 100%;
+      padding: 6px 8px;
+      border-radius: 6px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(255,255,255,0.06);
+      color: #e0e0e0;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .controls select:focus { outline: none; border-color: rgba(100, 200, 255, 0.4); }
+    .status {
+      margin-top: 12px;
+      padding-top: 10px;
+      border-top: 1px solid rgba(255,255,255,0.08);
+      font-size: 11px;
+      color: #888;
+      line-height: 1.6;
+    }
+    .status .value { color: #aee; }
+    .legend-img {
+      margin-top: 10px;
+      display: block;
+      height: 180px;
+      width: 24px;
+      border-radius: 4px;
+      border: 1px solid rgba(255,255,255,0.1);
+    }
+    .legend-labels {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      height: 180px;
+      font-size: 10px;
+      color: #888;
+      padding: 2px 0;
+    }
+    .legend-row {
+      display: flex;
+      gap: 6px;
+      align-items: stretch;
+      margin-top: 8px;
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div class="controls">
+    <h3>RadrView</h3>
+
+    <label>Palette</label>
+    <select id="palette"></select>
+
+    <label>Source</label>
+    <select id="source">
+      <option value="composite" selected>Composite</option>
+      <option value="mrms">MRMS (USA)</option>
+      <option value="ec">Environment Canada</option>
+    </select>
+
+    <label>Opacity</label>
+    <input type="range" id="opacity" min="0" max="100" value="70" style="width:100%">
+
+    <div class="legend-row">
+      <img id="legend" class="legend-img" />
+      <div class="legend-labels">
+        <span>70+ dBZ</span>
+        <span>50</span>
+        <span>35</span>
+        <span>20</span>
+        <span>5</span>
+      </div>
+    </div>
+
+    <div class="status">
+      <div>Frame: <span class="value" id="frame-ts">--</span></div>
+      <div>Age: <span class="value" id="frame-age">--</span></div>
+      <div>Tiles: <span class="value" id="tile-count">--</span></div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    const API = window.location.origin;
+    let radarLayer = null;
+    let currentFrame = null;
+
+    // Init map centered on North America
+    const map = L.map('map', { zoomControl: false }).setView([42, -95], 5);
+    L.control.zoom({ position: 'bottomleft' }).addTo(map);
+
+    // Dark basemap
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      attribution: '&copy; OpenStreetMap &copy; CARTO',
+      subdomains: 'abcd',
+      maxZoom: 19,
+    }).addTo(map);
+
+    // Load palettes
+    async function loadPalettes() {
+      const res = await fetch(`${API}/palettes`);
+      const data = await res.json();
+      const sel = document.getElementById('palette');
+      data.palettes.forEach(p => {
+        const opt = document.createElement('option');
+        opt.value = p.name;
+        opt.textContent = p.name.charAt(0).toUpperCase() + p.name.slice(1) + ' — ' + p.description;
+        if (p.name === 'dark') opt.selected = true;
+        sel.appendChild(opt);
+      });
+      updateLegend();
+    }
+
+    function updateLegend() {
+      const palette = document.getElementById('palette').value;
+      document.getElementById('legend').src = `${API}/palette/${palette}/legend`;
+    }
+
+    function addRadarLayer() {
+      if (radarLayer) map.removeLayer(radarLayer);
+      if (!currentFrame) return;
+
+      const palette = document.getElementById('palette').value;
+      const source = document.getElementById('source').value;
+      const opacity = document.getElementById('opacity').value / 100;
+
+      radarLayer = L.tileLayer(`${API}/tile/${currentFrame}/{z}/{x}/{y}?palette=${palette}&source=${source}`, {
+        opacity,
+        maxZoom: 8,
+        minZoom: 2,
+        tileSize: 256,
+        attribution: 'RadrView',
+      }).addTo(map);
+    }
+
+    async function fetchLatestFrame() {
+      const source = document.getElementById('source').value;
+      try {
+        const res = await fetch(`${API}/frames/latest?source=${source}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const changed = currentFrame !== data.timestamp;
+        currentFrame = data.timestamp;
+        document.getElementById('frame-ts').textContent = data.timestamp;
+        document.getElementById('frame-age').textContent = data.age + 's';
+        if (changed) addRadarLayer();
+      } catch (e) {
+        document.getElementById('frame-ts').textContent = 'error';
+      }
+    }
+
+    // Event listeners
+    document.getElementById('palette').addEventListener('change', () => {
+      updateLegend();
+      addRadarLayer();
+    });
+    document.getElementById('source').addEventListener('change', () => {
+      fetchLatestFrame();
+    });
+    document.getElementById('opacity').addEventListener('input', () => {
+      if (radarLayer) radarLayer.setOpacity(document.getElementById('opacity').value / 100);
+    });
+
+    // Init
+    loadPalettes();
+    fetchLatestFrame();
+    setInterval(fetchLatestFrame, 30000);
+  </script>
+</body>
+</html>
