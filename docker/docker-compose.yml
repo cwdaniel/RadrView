@@ -30,7 +30,7 @@ services:
       - REDIS_URL=redis://redis:6379
       - DATA_DIR=/data
       - ZOOM_MIN=2
-      - ZOOM_MAX=8
+      - ZOOM_MAX=10
       - LOG_LEVEL=info
     restart: unless-stopped
     depends_on:
@@ -100,7 +100,7 @@ services:
       - REDIS_URL=redis://redis:6379
       - DATA_DIR=/data
       - ZOOM_MIN=2
-      - ZOOM_MAX=8
+      - ZOOM_MAX=10
       - LOG_LEVEL=info
     restart: unless-stopped
     depends_on:
