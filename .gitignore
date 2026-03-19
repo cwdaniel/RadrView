@@ -1,0 +1,7 @@
+node_modules/
+dist/
+data/
+*.tif
+*.grib2
+*.grib2.gz
+.env
