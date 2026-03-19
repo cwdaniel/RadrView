@@ -1,0 +1,80 @@
+services:
+  ingest-mrms:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: ["node", "dist/ingest/mrms.js"]
+    volumes:
+      - radar-data:/data
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - DATA_DIR=/data
+      - LOG_LEVEL=info
+      - POLL_INTERVAL_MS=30000
+    restart: unless-stopped
+    depends_on:
+      - redis
+
+  tiler:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: ["node", "dist/pipeline/tiler.js"]
+    volumes:
+      - radar-data:/data
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - DATA_DIR=/data
+      - ZOOM_MIN=2
+      - ZOOM_MAX=8
+      - LOG_LEVEL=info
+    restart: unless-stopped
+    depends_on:
+      - redis
+
+  server:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: ["node", "dist/server/index.js"]
+    ports:
+      - "8600:8600"
+    volumes:
+      - radar-data:/data:ro
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - DATA_DIR=/data
+      - PORT=8600
+      - LOG_LEVEL=info
+    restart: unless-stopped
+    depends_on:
+      - redis
+
+  cleanup:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: ["node", "dist/pipeline/cleanup.js"]
+    volumes:
+      - radar-data:/data
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - DATA_DIR=/data
+      - RETENTION_HOURS=24
+      - LOG_LEVEL=info
+    restart: unless-stopped
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis-data:/data
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    restart: unless-stopped
+
+volumes:
+  radar-data:
+    driver: local
+  redis-data:
+    driver: local
