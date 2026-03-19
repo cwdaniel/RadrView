@@ -18,7 +18,7 @@ const TRANSPARENT_PNG = Buffer.from(
   'base64',
 );
 
-export function createApp(redis: Redis) {
+export function createApp(redis: Redis): { app: ReturnType<typeof express> } {
   const app = express();
 
   const tileCache = new LRUCache<string, Buffer>({
