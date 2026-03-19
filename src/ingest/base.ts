@@ -6,6 +6,7 @@ export abstract class BaseIngester {
   abstract readonly source: string;
   abstract readonly pollIntervalMs: number;
 
+  protected readonly queueKey: string = 'queue:normalize';
   protected redis: Redis;
   protected logger;
   private running = false;
@@ -48,7 +49,7 @@ export abstract class BaseIngester {
             for (const result of results) {
               // Push to reliable queue for the tiler.
               // The tiler writes frames:* after tiles are generated.
-              await this.redis.rpush('queue:normalize', JSON.stringify(result));
+              await this.redis.rpush(this.queueKey, JSON.stringify(result));
             }
             await this.redis.hset(`source:${this.source}`, 'lastSuccess', Date.now());
             await this.redis.hset(`source:${this.source}`, 'consecutiveErrors', 0);
