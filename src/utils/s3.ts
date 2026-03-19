@@ -17,7 +17,7 @@ export function buildFileUrl(key: string): string {
 }
 
 export function parseS3ListResponse(xml: string): string[] {
-  const parser = new XMLParser();
+  const parser = new XMLParser({ processEntities: false });
   const parsed = parser.parse(xml);
   const result = parsed?.ListBucketResult;
   if (!result?.Contents) return [];

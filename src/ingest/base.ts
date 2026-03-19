@@ -60,7 +60,7 @@ export abstract class BaseIngester {
       } catch (error) {
         this.currentOperation = null;
         consecutiveErrors++;
-        this.logger.error({ error, consecutiveErrors }, 'Ingest poll failed');
+        this.logger.error({ err: error, consecutiveErrors }, 'Ingest poll failed');
         await this.redis.hset(`source:${this.source}`, 'lastError', Date.now());
         await this.redis.hset(`source:${this.source}`, 'consecutiveErrors', consecutiveErrors);
 

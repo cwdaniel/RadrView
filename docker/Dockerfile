@@ -1,12 +1,8 @@
 FROM node:22-slim
 
-# Install GDAL and build dependencies
+# Install GDAL CLI tools
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gdal-bin \
-    libgdal-dev \
-    g++ \
-    make \
-    python3 \
     wget \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
@@ -28,8 +24,5 @@ RUN pnpm install --frozen-lockfile
 COPY tsconfig.json ./
 COPY src/ ./src/
 RUN pnpm build
-
-# Data directories are created at runtime by the application
-# (Docker volumes mount over /data/ anyway)
 
 CMD ["node", "dist/server/index.js"]

@@ -2,7 +2,7 @@ import { Redis } from 'ioredis';
 import path from 'node:path';
 import { mkdir, unlink, rm, readdir } from 'node:fs/promises';
 import sharp from 'sharp';
-import { openRaster, getRasterInfo, readBand } from '../utils/gdal.js';
+import { getRasterInfo } from '../utils/gdal.js';
 import {
   getTilesForBounds,
   tileToMercatorBounds,
@@ -21,10 +21,13 @@ async function generateTiles(
   zoomMin: number,
   zoomMax: number,
 ): Promise<{ tileCount: number; skipped: number }> {
-  const ds = await openRaster(normalizedPath);
-  const info = getRasterInfo(ds);
-  const rasterData = await readBand(ds);
-  ds.close();
+  // Get raster metadata via gdalinfo CLI
+  const info = await getRasterInfo(normalizedPath);
+
+  // Read raster pixels via sharp (normalized GeoTIFF is single-band byte)
+  const { data: rasterData, info: imgInfo } = await sharp(normalizedPath)
+    .raw()
+    .toBuffer({ resolveWithObject: true });
 
   let tileCount = 0;
   let skipped = 0;
@@ -43,8 +46,8 @@ async function generateTiles(
 
       const tilePixels = extractTilePixels(
         rasterData,
-        info.width,
-        info.height,
+        imgInfo.width,
+        imgInfo.height,
         info.bounds.west,
         info.bounds.north,
         info.geoTransform[1],
