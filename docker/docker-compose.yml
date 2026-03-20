@@ -14,6 +14,41 @@ services:
       - DATA_DIR=/data
       - LOG_LEVEL=info
       - POLL_INTERVAL_MS=30000
+      - MRMS_REGION=conus
+    restart: unless-stopped
+    depends_on:
+      - redis
+
+  ingest-mrms-alaska:
+    container_name: radrview-ingest-alaska
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: ["node", "dist/ingest/mrms.js"]
+    volumes:
+      - radar-data:/data
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - DATA_DIR=/data
+      - LOG_LEVEL=info
+      - MRMS_REGION=alaska
+    restart: unless-stopped
+    depends_on:
+      - redis
+
+  ingest-mrms-hawaii:
+    container_name: radrview-ingest-hawaii
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: ["node", "dist/ingest/mrms.js"]
+    volumes:
+      - radar-data:/data
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - DATA_DIR=/data
+      - LOG_LEVEL=info
+      - MRMS_REGION=hawaii
     restart: unless-stopped
     depends_on:
       - redis
