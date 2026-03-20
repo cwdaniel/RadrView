@@ -67,17 +67,28 @@ def upscale(inp, out):
     img = cv2.imread(inp, cv2.IMREAD_UNCHANGED)
     if img is None:
         sys.exit(1)
-    has_alpha = img.shape[2] == 4 if len(img.shape) == 3 else False
-    alpha = img[:, :, 3] if has_alpha else None
-    rgb = cv2.cvtColor(img[:, :, :3] if has_alpha else img, cv2.COLOR_BGR2RGB)
+    # Convert grayscale to 3-channel for the model (trained on RGB)
+    if len(img.shape) == 2:
+        rgb = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+    elif img.shape[2] == 1:
+        rgb = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+    elif img.shape[2] == 4:
+        rgb = cv2.cvtColor(img[:, :, :3], cv2.COLOR_BGR2RGB)
+    else:
+        rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+    model = get_model()
+    scale = 4
+    h, w = rgb.shape[:2]
+
     t = torch.from_numpy(rgb.astype(np.float32) / 255.0).permute(2, 0, 1).unsqueeze(0).half().cuda()
     with torch.no_grad():
-        out_t = get_model()(t).squeeze(0).permute(1, 2, 0).clamp(0, 1).cpu().float().numpy()
-    result = cv2.cvtColor((out_t * 255).astype(np.uint8), cv2.COLOR_RGB2BGR)
-    if alpha is not None:
-        h, w = result.shape[:2]
-        a = cv2.resize(alpha, (w, h), interpolation=cv2.INTER_LANCZOS4)
-        result = np.dstack([result, a])
+        o = model(t).squeeze(0).permute(1, 2, 0).clamp(0, 1).cpu().float().numpy()
+    del t
+    torch.cuda.empty_cache()
+
+    # Convert back to grayscale (average channels since input was grayscale replicated to RGB)
+    result = np.mean(o * 255, axis=2).astype(np.uint8)
     cv2.imwrite(out, result)
 
 if __name__ == '__main__':
