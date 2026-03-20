@@ -185,6 +185,10 @@
         currentFrame = data.timestamp;
         document.getElementById('frame-ts').textContent = data.timestamp;
         document.getElementById('frame-age').textContent = data.age + 's';
+        // Fetch frame count
+        fetch(`${API}/frames?source=${source}&limit=1000`).then(r=>r.json()).then(d=>{
+          document.getElementById('tile-count').textContent = d.count + ' frames';
+        }).catch(()=>{});
         if (changed) addRadarLayer();
       } catch (e) {
         document.getElementById('frame-ts').textContent = 'error';
