@@ -1,9 +1,10 @@
 import { Router } from 'express';
 import type { Redis } from 'ioredis';
+import { SOURCES } from '../config/sources.js';
 
 const startTime = Date.now();
 
-const SOURCE_NAMES = ['mrms', 'mrms-alaska', 'mrms-hawaii', 'ec'];
+const SOURCE_NAMES = Object.values(SOURCES).map(s => s.name);
 
 async function getSourceHealth(redis: Redis, name: string) {
   const [health, latest] = await Promise.all([

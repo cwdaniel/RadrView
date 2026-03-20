@@ -1,8 +1,17 @@
 import { Router } from 'express';
 import type { Redis } from 'ioredis';
+import { SOURCES } from '../config/sources.js';
 
 export function createFramesRouter(redis: Redis): Router {
   const router = Router();
+
+  router.get('/sources', (_req, res) => {
+    const sources = [
+      { name: 'composite', description: 'All sources merged' },
+      ...Object.values(SOURCES).map(s => ({ name: s.name, description: s.product })),
+    ];
+    res.json({ sources });
+  });
 
   router.get('/frames', async (req, res) => {
     const source = (req.query.source as string) || 'composite';

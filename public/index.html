@@ -94,11 +94,7 @@
 
     <label>Source</label>
     <select id="source">
-      <option value="composite" selected>Composite</option>
-      <option value="mrms">MRMS (CONUS)</option>
-      <option value="mrms-alaska">MRMS (Alaska)</option>
-      <option value="mrms-hawaii">MRMS (Hawaii)</option>
-      <option value="ec">Environment Canada</option>
+      <option value="composite" selected>Composite (All)</option>
     </select>
 
     <label>Opacity</label>
@@ -243,7 +239,22 @@
       ws.onerror = () => ws.close();
     }
 
+    // Load sources dynamically
+    async function loadSources() {
+      const res = await fetch(`${API}/sources`);
+      const data = await res.json();
+      const sel = document.getElementById('source');
+      data.sources.forEach(s => {
+        if (s.name === 'composite') return; // already in HTML
+        const opt = document.createElement('option');
+        opt.value = s.name;
+        opt.textContent = s.name.toUpperCase() + ' — ' + s.description;
+        sel.appendChild(opt);
+      });
+    }
+
     // Init
+    loadSources();
     loadPalettes();
     fetchLatestFrame();
     connectWebSocket();
