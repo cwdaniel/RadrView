@@ -10,6 +10,7 @@ import { createLogger } from '../utils/logger.js';
 import { createFramesRouter } from './frames.js';
 import { createHealthRouter } from './health.js';
 import { loadPalettes, getLUT, colorizeTilePng, createPaletteRouter } from './palette.js';
+import { getUpscaledTile, isUpscalerAvailable } from './upscale.js';
 
 const logger = createLogger('server');
 
@@ -77,6 +78,24 @@ export function createApp(redis: Redis): { app: ReturnType<typeof express> } {
     );
 
     if (!existsSync(tilePath)) {
+      // For zoom 11-12: try GPU-upscaled tile from parent zoom 10
+      const zoomNum = parseInt(z);
+      if (zoomNum >= 11 && zoomNum <= 12 && isUpscalerAvailable()) {
+        const upscaled = await getUpscaledTile(
+          source, timestamp, zoomNum, parseInt(x), parseInt(y),
+          (grayscale) => colorizeTilePng(grayscale, lut),
+          config.dataDir,
+        );
+        if (upscaled) {
+          tileCache.set(cacheKey, upscaled);
+          res.setHeader('Content-Type', 'image/png');
+          res.setHeader('X-Cache', 'upscaled');
+          await setCacheHeaders(res, timestamp, redis);
+          res.send(upscaled);
+          return;
+        }
+      }
+
       res.setHeader('Content-Type', 'image/png');
       await setCacheHeaders(res, timestamp, redis);
       res.send(TRANSPARENT_PNG);

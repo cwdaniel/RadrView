@@ -11,6 +11,7 @@
     "dev:ingest": "tsx src/ingest/mrms.ts",
     "dev:tiler": "tsx src/pipeline/tiler.ts",
     "dev:cleanup": "tsx src/pipeline/cleanup.ts",
+    "dev:upscaler": "tsx src/pipeline/upscaler.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "tsc --noEmit"

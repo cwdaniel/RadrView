@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pnpm lint:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(pnpm test:*)",
+      "Bash(docker info:*)",
+      "Bash(docker compose:*)",
+      "Bash(curl:*)",
+      "Bash(pnpm install:*)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(f''''{d[\"\"count\"\"]} frames available''''\\)\")",
+      "Bash(node:*)",
+      "Bash(node -e \"process.stdin.on\\(''''data'''',d=>{const j=JSON.parse\\(d\\);console.log\\(j.count+'''' composite frames, latest: ''''+j.latest\\)}\\)\")",
+      "Bash(node -e \"process.stdin.on\\(''''data'''',d=>{const j=JSON.parse\\(d\\);console.log\\(j.count+'''' ec frames, latest: ''''+j.latest\\)}\\)\")",
+      "Bash(pnpm add:*)",
+      "Bash(docker exec:*)",
+      "Bash(where upscayl-bin:*)",
+      "Bash(where upscale:*)",
+      "Bash(MSYS_NO_PATHCONV=1 docker exec radrview-server sh -c \"/app/tools/realesrgan-ncnn-vulkan -i /app/tools/input.jpg -o /tmp/test_up.png -n realesrgan-x4plus -s 4 -g 0 2>&1\")"
+    ]
+  }
+}
