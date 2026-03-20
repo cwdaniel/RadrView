@@ -15,9 +15,14 @@ describe('findNearestDbz', () => {
     expect(dbz).toBeLessThanOrEqual(55);
   });
 
-  it('maps white to high dBZ', () => {
+  it('rejects white as non-radar color', () => {
     const dbz = findNearestDbz(255, 255, 255);
-    expect(dbz).toBeGreaterThanOrEqual(65);
+    expect(dbz).toBe(-1);
+  });
+
+  it('rejects gray as non-radar color', () => {
+    expect(findNearestDbz(150, 150, 150)).toBe(-1);
+    expect(findNearestDbz(100, 100, 100)).toBe(-1);
   });
 });
 
@@ -37,6 +42,6 @@ describe('reverseMapTile', () => {
     expect(result[0]).toBeGreaterThan(0); // green → dBZ
     expect(result[1]).toBeGreaterThan(0); // red → dBZ
     expect(result[2]).toBe(0);            // transparent → NoData
-    expect(result[3]).toBeGreaterThan(0); // white → dBZ
+    expect(result[3]).toBe(0);            // white → rejected as non-radar
   });
 });

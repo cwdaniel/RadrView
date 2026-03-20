@@ -3,13 +3,13 @@ import { dbzToPixel } from './geo.js';
 interface ColorEntry {
   rgb: [number, number, number];
   dbz: number;
-  pixel: number; // pre-computed dbzToPixel value
+  pixel: number;
 }
 
-// Hardcoded EC RADAR_1KM_RDBR color table
+// EC RADAR_1KM_RRAI color table — only actual radar precipitation colors.
+// Excludes gray/white which are cartographic features (borders, coastlines)
+// rendered by the WMS on top of radar data.
 const EC_COLOR_TABLE: ColorEntry[] = [
-  { rgb: [150, 150, 150], dbz: 5 },
-  { rgb: [100, 100, 100], dbz: 10 },
   { rgb: [0, 255, 0], dbz: 15 },
   { rgb: [0, 200, 0], dbz: 20 },
   { rgb: [0, 144, 0], dbz: 25 },
@@ -21,8 +21,12 @@ const EC_COLOR_TABLE: ColorEntry[] = [
   { rgb: [144, 0, 0], dbz: 55 },
   { rgb: [255, 0, 255], dbz: 60 },
   { rgb: [144, 0, 255], dbz: 65 },
-  { rgb: [255, 255, 255], dbz: 70 },
 ].map(e => ({ ...e, pixel: dbzToPixel(e.dbz) })) as ColorEntry[];
+
+// Maximum RGB distance squared to accept a color match.
+// Beyond this threshold, the pixel is treated as NoData (not precipitation).
+// This filters out cartographic features (borders, labels, coastlines).
+const MAX_DIST_SQ = 3000; // ~sqrt(3000) ≈ 55 per channel
 
 export function findNearestDbz(r: number, g: number, b: number): number {
   let bestDist = Infinity;
@@ -37,6 +41,8 @@ export function findNearestDbz(r: number, g: number, b: number): number {
       bestDbz = entry.dbz;
     }
   }
+  // If the closest color is too far away, it's not a radar color
+  if (bestDist > MAX_DIST_SQ) return -1;
   return bestDbz;
 }
 
@@ -45,14 +51,18 @@ export function reverseMapTile(rgba: Uint8Array, width: number, height: number):
   for (let i = 0; i < width * height; i++) {
     const a = rgba[i * 4 + 3];
     if (a === 0) {
-      output[i] = 0; // transparent → NoData
+      output[i] = 0;
       continue;
     }
     const r = rgba[i * 4 + 0];
     const g = rgba[i * 4 + 1];
     const b = rgba[i * 4 + 2];
     const dbz = findNearestDbz(r, g, b);
-    output[i] = dbzToPixel(dbz);
+    if (dbz < 0) {
+      output[i] = 0; // Unrecognized color → NoData
+    } else {
+      output[i] = dbzToPixel(dbz);
+    }
   }
   return output;
 }
