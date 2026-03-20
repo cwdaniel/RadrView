@@ -17,7 +17,9 @@
       "Bash(docker exec:*)",
       "Bash(where upscayl-bin:*)",
       "Bash(where upscale:*)",
-      "Bash(MSYS_NO_PATHCONV=1 docker exec radrview-server sh -c \"/app/tools/realesrgan-ncnn-vulkan -i /app/tools/input.jpg -o /tmp/test_up.png -n realesrgan-x4plus -s 4 -g 0 2>&1\")"
+      "Bash(MSYS_NO_PATHCONV=1 docker exec radrview-server sh -c \"/app/tools/realesrgan-ncnn-vulkan -i /app/tools/input.jpg -o /tmp/test_up.png -n realesrgan-x4plus -s 4 -g 0 2>&1\")",
+      "Bash(MSYS_NO_PATHCONV=1 docker exec radrview-redis redis-cli GET latest:composite)",
+      "Bash(MSYS_NO_PATHCONV=1 docker exec radrview-upscaler sh -c \"find /data/tiles/mrms/20260320180200/12 -name '*.png' 2>/dev/null | wc -l || echo '0'\")"
     ]
   }
 }

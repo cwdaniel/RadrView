@@ -19,7 +19,7 @@ import { loadPalettes, getLUT, colorizeTilePng } from '../server/palette.js';
 const execFileAsync = promisify(execFile);
 const logger = createLogger('upscaler');
 
-const UPSCALER_PYTHON = process.env.UPSCALER_PYTHON || '/opt/esrgan/bin/python3';
+const UPSCALER_PYTHON = process.env.UPSCALER_PYTHON || 'python3';
 const UPSCALER_SCRIPT = process.env.UPSCALER_SCRIPT || '/app/upscale.py';
 const PALETTE = process.env.UPSCALE_PALETTE || 'dark';
 const SOURCES = ['mrms', 'mrms-alaska', 'mrms-hawaii', 'ec', 'composite'];
@@ -146,13 +146,11 @@ async function main() {
       const latest = await redis.get(`latest:${source}`);
       if (!latest || latest === lastProcessed) continue;
 
+      logger.info({ source, timestamp: latest }, 'Checking for tiles to upscale');
       const start = Date.now();
       const count = await processFrame(source, latest, lut);
-
-      if (count > 0) {
-        const durationMs = Date.now() - start;
-        logger.info({ source, timestamp: latest, upscaled: count, durationMs }, 'Upscaled frame');
-      }
+      const durationMs = Date.now() - start;
+      logger.info({ source, timestamp: latest, upscaled: count, durationMs }, 'Upscale pass complete');
     }
 
     lastProcessed = (await redis.get('latest:composite')) || '';
