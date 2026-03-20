@@ -1,6 +1,6 @@
 import { Redis } from 'ioredis';
 import path from 'node:path';
-import { mkdir, unlink, rm, readdir } from 'node:fs/promises';
+import { mkdir, unlink, rm, readdir, writeFile } from 'node:fs/promises';
 import sharp from 'sharp';
 import { getRasterInfo } from '../utils/gdal.js';
 import {
@@ -15,67 +15,33 @@ import type { IngestResult, TileResult } from '../types.js';
 const logger = createLogger('tiler');
 
 /**
- * Bilinear interpolation sampling from source raster into a destination buffer.
- * Reads source pixels once from memory, no disk I/O per tile.
+ * Fast nearest-neighbor sampling with NoData awareness.
+ * Reads from pre-loaded raster buffer — zero disk I/O.
  */
-function sampleRegion(
+function sampleTile(
   src: Uint8Array,
   srcW: number,
   srcH: number,
-  srcX: number,
-  srcY: number,
-  regionW: number,
-  regionH: number,
+  srcXf: number,
+  srcYf: number,
+  srcRegionW: number,
+  srcRegionH: number,
   dstW: number,
   dstH: number,
 ): Uint8Array {
   const out = new Uint8Array(dstW * dstH);
-  const scaleX = regionW / dstW;
-  const scaleY = regionH / dstH;
+  const scaleX = srcRegionW / dstW;
+  const scaleY = srcRegionH / dstH;
 
   for (let dy = 0; dy < dstH; dy++) {
+    const sy = Math.min(Math.floor(srcYf + (dy + 0.5) * scaleY), srcH - 1);
+    if (sy < 0) continue;
+    const srcRowOffset = sy * srcW;
+
     for (let dx = 0; dx < dstW; dx++) {
-      // Map destination pixel to source coordinate
-      const fx = srcX + (dx + 0.5) * scaleX;
-      const fy = srcY + (dy + 0.5) * scaleY;
-
-      // Bilinear interpolation
-      const x0 = Math.floor(fx);
-      const y0 = Math.floor(fy);
-      const x1 = Math.min(x0 + 1, srcW - 1);
-      const y1 = Math.min(y0 + 1, srcH - 1);
-
-      if (x0 < 0 || x0 >= srcW || y0 < 0 || y0 >= srcH) continue;
-
-      const tx = fx - x0;
-      const ty = fy - y0;
-
-      const v00 = src[y0 * srcW + x0];
-      const v10 = src[y0 * srcW + x1];
-      const v01 = src[y1 * srcW + x0];
-      const v11 = src[y1 * srcW + x1];
-
-      // NoData-aware interpolation: only blend non-zero pixels.
-      // Prevents false-color halos at data/NoData boundaries.
-      let val: number;
-      const nonZero = [v00, v10, v01, v11].filter(v => v > 0);
-      if (nonZero.length === 0) {
-        val = 0;
-      } else if (nonZero.length < 4) {
-        // At NoData boundary — use nearest neighbor (closest non-zero)
-        const nearest = tx < 0.5
-          ? (ty < 0.5 ? v00 : v01)
-          : (ty < 0.5 ? v10 : v11);
-        val = nearest;
-      } else {
-        // All 4 neighbors have data — safe to bilinear blend
-        val = v00 * (1 - tx) * (1 - ty) +
-              v10 * tx * (1 - ty) +
-              v01 * (1 - tx) * ty +
-              v11 * tx * ty;
-      }
-
-      out[dy * dstW + dx] = Math.round(val);
+      const sx = Math.min(Math.floor(srcXf + (dx + 0.5) * scaleX), srcW - 1);
+      if (sx < 0) continue;
+      out[dy * dstW + dx] = src[srcRowOffset + sx];
     }
   }
   return out;
@@ -89,7 +55,7 @@ async function generateTiles(
 ): Promise<{ tileCount: number; skipped: number }> {
   const info = await getRasterInfo(normalizedPath);
 
-  // Read entire raster into memory ONCE
+  // Read entire raster into memory ONCE as raw grayscale pixels
   const { data: rasterBuf, info: imgInfo } = await sharp(normalizedPath)
     .grayscale()
     .raw()
@@ -112,67 +78,80 @@ async function generateTiles(
   for (let z = zoomMin; z <= zoomMax; z++) {
     const tiles = getTilesForBounds(z, rasterLeft, rasterTop, rasterRight, rasterBottom);
 
-    // Process tiles in parallel batches for speed
-    const BATCH = 50;
-    for (let i = 0; i < tiles.length; i += BATCH) {
-      const batch = tiles.slice(i, i + BATCH);
-      const results = await Promise.all(batch.map(async (tile) => {
-        const tileBounds = tileToMercatorBounds(tile.z, tile.x, tile.y);
-        const tileW = tileBounds.east - tileBounds.west;
-        const tileH = tileBounds.north - tileBounds.south;
+    // Pre-compute all tile pixels in JS (fast — no I/O, just array indexing)
+    const tileResults: Array<{ tile: typeof tiles[0]; pixels: Uint8Array } | null> = [];
 
-        const clampedWest = Math.max(tileBounds.west, rasterLeft);
-        const clampedEast = Math.min(tileBounds.east, rasterRight);
-        const clampedNorth = Math.min(tileBounds.north, rasterTop);
-        const clampedSouth = Math.max(tileBounds.south, rasterBottom);
+    for (const tile of tiles) {
+      const tileBounds = tileToMercatorBounds(tile.z, tile.x, tile.y);
+      const tileW = tileBounds.east - tileBounds.west;
+      const tileH = tileBounds.north - tileBounds.south;
 
-        if (clampedWest >= clampedEast || clampedSouth >= clampedNorth) return false;
+      const clampedWest = Math.max(tileBounds.west, rasterLeft);
+      const clampedEast = Math.min(tileBounds.east, rasterRight);
+      const clampedNorth = Math.min(tileBounds.north, rasterTop);
+      const clampedSouth = Math.max(tileBounds.south, rasterBottom);
 
-        // Source pixel coords
-        const srcXf = ((clampedWest - rasterLeft) / rasterMeterWidth) * rasterWidth;
-        const srcYf = ((rasterTop - clampedNorth) / rasterMeterHeight) * rasterHeight;
-        const srcWf = ((clampedEast - clampedWest) / rasterMeterWidth) * rasterWidth;
-        const srcHf = ((clampedNorth - clampedSouth) / rasterMeterHeight) * rasterHeight;
+      if (clampedWest >= clampedEast || clampedSouth >= clampedNorth) {
+        tileResults.push(null);
+        continue;
+      }
 
-        // Destination position within 256x256 tile
+      const srcXf = ((clampedWest - rasterLeft) / rasterMeterWidth) * rasterWidth;
+      const srcYf = ((rasterTop - clampedNorth) / rasterMeterHeight) * rasterHeight;
+      const srcWf = ((clampedEast - clampedWest) / rasterMeterWidth) * rasterWidth;
+      const srcHf = ((clampedNorth - clampedSouth) / rasterMeterHeight) * rasterHeight;
+
+      const fullyInside = clampedWest === tileBounds.west &&
+        clampedEast === tileBounds.east &&
+        clampedNorth === tileBounds.north &&
+        clampedSouth === tileBounds.south;
+
+      let pixels: Uint8Array;
+
+      if (fullyInside) {
+        pixels = sampleTile(rasterData, rasterWidth, rasterHeight, srcXf, srcYf, srcWf, srcHf, 256, 256);
+      } else {
         const dstX = Math.round(((clampedWest - tileBounds.west) / tileW) * 256);
         const dstY = Math.round(((tileBounds.north - clampedNorth) / tileH) * 256);
         const dstW = Math.max(1, Math.round(((clampedEast - clampedWest) / tileW) * 256));
         const dstH = Math.max(1, Math.round(((clampedNorth - clampedSouth) / tileH) * 256));
 
-        // Sample from in-memory raster with bilinear interpolation
-        const region = sampleRegion(
-          rasterData, rasterWidth, rasterHeight,
-          Math.floor(srcXf), Math.floor(srcYf),
-          Math.ceil(srcWf), Math.ceil(srcHf),
-          dstW, dstH,
-        );
-
-        // Place on 256x256 canvas
-        const canvas = new Uint8Array(256 * 256);
+        const region = sampleTile(rasterData, rasterWidth, rasterHeight, srcXf, srcYf, srcWf, srcHf, dstW, dstH);
+        pixels = new Uint8Array(256 * 256);
         for (let row = 0; row < dstH && (dstY + row) < 256; row++) {
-          for (let col = 0; col < dstW && (dstX + col) < 256; col++) {
-            canvas[(dstY + row) * 256 + (dstX + col)] = region[row * dstW + col];
-          }
+          pixels.set(region.subarray(row * dstW, row * dstW + Math.min(dstW, 256 - dstX)), (dstY + row) * 256 + dstX);
         }
+      }
 
-        if (isEmptyTile(canvas)) return false;
+      if (isEmptyTile(pixels)) {
+        tileResults.push(null);
+      } else {
+        tileResults.push({ tile, pixels });
+      }
+    }
 
+    // Now encode PNGs in parallel batches (this is the slow part)
+    const validTiles = tileResults.filter((r): r is NonNullable<typeof r> => r !== null);
+    skipped += tileResults.length - validTiles.length;
+
+    const BATCH = 200;
+    for (let i = 0; i < validTiles.length; i += BATCH) {
+      const batch = validTiles.slice(i, i + BATCH);
+      await Promise.all(batch.map(async ({ tile, pixels }) => {
         const tilePath = path.join(outputDir, String(tile.z), String(tile.x), `${tile.y}.png`);
         await mkdir(path.dirname(tilePath), { recursive: true });
 
-        await sharp(Buffer.from(canvas.buffer), {
+        const png = await sharp(Buffer.from(pixels.buffer), {
           raw: { width: 256, height: 256, channels: 1 },
         })
-          .png({ compressionLevel: 6, palette: false })
-          .toFile(tilePath);
+          .png({ compressionLevel: 2 })
+          .toBuffer();
 
-        return true;
+        await writeFile(tilePath, png);
       }));
-
-      tileCount += results.filter(Boolean).length;
-      skipped += results.filter(r => !r).length;
     }
+
+    tileCount += validTiles.length;
   }
 
   return { tileCount, skipped };
