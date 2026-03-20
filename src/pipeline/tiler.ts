@@ -15,8 +15,9 @@ import type { IngestResult, TileResult } from '../types.js';
 const logger = createLogger('tiler');
 
 /**
- * Fast nearest-neighbor sampling with NoData awareness.
- * Reads from pre-loaded raster buffer — zero disk I/O.
+ * Bilinear interpolation sampling with NoData awareness.
+ * Smooths between 1km radar data points for clean sub-pixel rendering.
+ * Falls back to nearest-neighbor at NoData boundaries to prevent halos.
  */
 function sampleTile(
   src: Uint8Array,
@@ -34,14 +35,40 @@ function sampleTile(
   const scaleY = srcRegionH / dstH;
 
   for (let dy = 0; dy < dstH; dy++) {
-    const sy = Math.min(Math.floor(srcYf + (dy + 0.5) * scaleY), srcH - 1);
-    if (sy < 0) continue;
-    const srcRowOffset = sy * srcW;
+    const fy = srcYf + (dy + 0.5) * scaleY;
+    const y0 = Math.floor(fy);
+    const y1 = Math.min(y0 + 1, srcH - 1);
+    if (y0 < 0 || y0 >= srcH) continue;
+    const ty = fy - y0;
 
     for (let dx = 0; dx < dstW; dx++) {
-      const sx = Math.min(Math.floor(srcXf + (dx + 0.5) * scaleX), srcW - 1);
-      if (sx < 0) continue;
-      out[dy * dstW + dx] = src[srcRowOffset + sx];
+      const fx = srcXf + (dx + 0.5) * scaleX;
+      const x0 = Math.floor(fx);
+      const x1 = Math.min(x0 + 1, srcW - 1);
+      if (x0 < 0 || x0 >= srcW) continue;
+      const tx = fx - x0;
+
+      const v00 = src[y0 * srcW + x0];
+      const v10 = src[y0 * srcW + x1];
+      const v01 = src[y1 * srcW + x0];
+      const v11 = src[y1 * srcW + x1];
+
+      // NoData-aware: if any neighbor is 0, use nearest non-zero
+      if (v00 === 0 || v10 === 0 || v01 === 0 || v11 === 0) {
+        // Nearest neighbor at NoData boundaries
+        const nearest = tx < 0.5
+          ? (ty < 0.5 ? v00 : v01)
+          : (ty < 0.5 ? v10 : v11);
+        out[dy * dstW + dx] = nearest;
+      } else {
+        // Bilinear blend — smooth interpolation between data points
+        out[dy * dstW + dx] = Math.round(
+          v00 * (1 - tx) * (1 - ty) +
+          v10 * tx * (1 - ty) +
+          v01 * (1 - tx) * ty +
+          v11 * tx * ty,
+        );
+      }
     }
   }
   return out;
