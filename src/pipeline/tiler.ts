@@ -1,5 +1,6 @@
 import { Redis } from 'ioredis';
 import path from 'node:path';
+import { readFileSync } from 'node:fs';
 import { mkdir, unlink, rm, readdir, writeFile } from 'node:fs/promises';
 import sharp from 'sharp';
 import { getRasterInfo } from '../utils/gdal.js';
@@ -14,66 +15,6 @@ import type { IngestResult, TileResult } from '../types.js';
 
 const logger = createLogger('tiler');
 
-/**
- * Bilinear interpolation sampling with NoData awareness.
- * Smooths between 1km radar data points for clean sub-pixel rendering.
- * Falls back to nearest-neighbor at NoData boundaries to prevent halos.
- */
-function sampleTile(
-  src: Uint8Array,
-  srcW: number,
-  srcH: number,
-  srcXf: number,
-  srcYf: number,
-  srcRegionW: number,
-  srcRegionH: number,
-  dstW: number,
-  dstH: number,
-): Uint8Array {
-  const out = new Uint8Array(dstW * dstH);
-  const scaleX = srcRegionW / dstW;
-  const scaleY = srcRegionH / dstH;
-
-  for (let dy = 0; dy < dstH; dy++) {
-    const fy = srcYf + (dy + 0.5) * scaleY;
-    const y0 = Math.floor(fy);
-    const y1 = Math.min(y0 + 1, srcH - 1);
-    if (y0 < 0 || y0 >= srcH) continue;
-    const ty = fy - y0;
-
-    for (let dx = 0; dx < dstW; dx++) {
-      const fx = srcXf + (dx + 0.5) * scaleX;
-      const x0 = Math.floor(fx);
-      const x1 = Math.min(x0 + 1, srcW - 1);
-      if (x0 < 0 || x0 >= srcW) continue;
-      const tx = fx - x0;
-
-      const v00 = src[y0 * srcW + x0];
-      const v10 = src[y0 * srcW + x1];
-      const v01 = src[y1 * srcW + x0];
-      const v11 = src[y1 * srcW + x1];
-
-      // NoData-aware: if any neighbor is 0, use nearest non-zero
-      if (v00 === 0 || v10 === 0 || v01 === 0 || v11 === 0) {
-        // Nearest neighbor at NoData boundaries
-        const nearest = tx < 0.5
-          ? (ty < 0.5 ? v00 : v01)
-          : (ty < 0.5 ? v10 : v11);
-        out[dy * dstW + dx] = nearest;
-      } else {
-        // Bilinear blend — smooth interpolation between data points
-        out[dy * dstW + dx] = Math.round(
-          v00 * (1 - tx) * (1 - ty) +
-          v10 * tx * (1 - ty) +
-          v01 * (1 - tx) * ty +
-          v11 * tx * ty,
-        );
-      }
-    }
-  }
-  return out;
-}
-
 async function generateTiles(
   normalizedPath: string,
   outputDir: string,
@@ -81,16 +22,11 @@ async function generateTiles(
   zoomMax: number,
 ): Promise<{ tileCount: number; skipped: number }> {
   const info = await getRasterInfo(normalizedPath);
+  const fileBuffer = readFileSync(normalizedPath);
 
-  // Read entire raster into memory ONCE as raw grayscale pixels
-  const { data: rasterBuf, info: imgInfo } = await sharp(normalizedPath)
-    .grayscale()
-    .raw()
-    .toBuffer({ resolveWithObject: true });
-
-  const rasterData = new Uint8Array(rasterBuf.buffer, rasterBuf.byteOffset, rasterBuf.byteLength);
-  const rasterWidth = imgInfo.width;
-  const rasterHeight = imgInfo.height;
+  const meta = await sharp(fileBuffer).metadata();
+  const rasterWidth = meta.width!;
+  const rasterHeight = meta.height!;
 
   const rasterLeft = info.bounds.west;
   const rasterTop = info.bounds.north;
@@ -104,60 +40,106 @@ async function generateTiles(
 
   for (let z = zoomMin; z <= zoomMax; z++) {
     const tiles = getTilesForBounds(z, rasterLeft, rasterTop, rasterRight, rasterBottom);
+    if (tiles.length === 0) continue;
 
-    // Pre-compute all tile pixels in JS (fast — no I/O, just array indexing)
+    // Calculate the pixel grid for this zoom level's tile extent
+    // Find the bounding tile range
+    let minTileX = Infinity, maxTileX = -Infinity;
+    let minTileY = Infinity, maxTileY = -Infinity;
+    for (const t of tiles) {
+      if (t.x < minTileX) minTileX = t.x;
+      if (t.x > maxTileX) maxTileX = t.x;
+      if (t.y < minTileY) minTileY = t.y;
+      if (t.y > maxTileY) maxTileY = t.y;
+    }
+
+    const gridW = (maxTileX - minTileX + 1);
+    const gridH = (maxTileY - minTileY + 1);
+    const gridPixelW = gridW * 256;
+    const gridPixelH = gridH * 256;
+
+    // The tile grid's geographic bounds
+    const gridBounds = {
+      west: tileToMercatorBounds(z, minTileX, minTileY).west,
+      north: tileToMercatorBounds(z, minTileX, minTileY).north,
+      east: tileToMercatorBounds(z, maxTileX, maxTileY).east,
+      south: tileToMercatorBounds(z, maxTileX, maxTileY).south,
+    };
+
+    // What portion of this grid does the raster cover?
+    const clampedWest = Math.max(rasterLeft, gridBounds.west);
+    const clampedEast = Math.min(rasterRight, gridBounds.east);
+    const clampedNorth = Math.min(rasterTop, gridBounds.north);
+    const clampedSouth = Math.max(rasterBottom, gridBounds.south);
+
+    // Source pixel region to extract
+    const srcLeft = Math.floor(((clampedWest - rasterLeft) / rasterMeterWidth) * rasterWidth);
+    const srcTop = Math.floor(((rasterTop - clampedNorth) / rasterMeterHeight) * rasterHeight);
+    const srcW = Math.min(Math.ceil(((clampedEast - clampedWest) / rasterMeterWidth) * rasterWidth), rasterWidth - srcLeft);
+    const srcH = Math.min(Math.ceil(((clampedNorth - clampedSouth) / rasterMeterHeight) * rasterHeight), rasterHeight - srcTop);
+
+    if (srcW < 1 || srcH < 1) continue;
+
+    // Destination size within the grid
+    const gridMeterW = gridBounds.east - gridBounds.west;
+    const gridMeterH = gridBounds.north - gridBounds.south;
+    const dstLeft = Math.round(((clampedWest - gridBounds.west) / gridMeterW) * gridPixelW);
+    const dstTop = Math.round(((gridBounds.north - clampedNorth) / gridMeterH) * gridPixelH);
+    const dstW = Math.max(1, Math.round(((clampedEast - clampedWest) / gridMeterW) * gridPixelW));
+    const dstH = Math.max(1, Math.round(((clampedNorth - clampedSouth) / gridMeterH) * gridPixelH));
+
+    // Extract source region and resize with lanczos3 to the grid pixel size
+    // This is ONE sharp resize per zoom level — the expensive operation done once
+    let resizedBuf: Buffer;
+    try {
+      resizedBuf = await sharp(fileBuffer)
+        .grayscale()
+        .extract({ left: srcLeft, top: srcTop, width: srcW, height: srcH })
+        .resize(dstW, dstH, { kernel: 'lanczos3' })
+        .raw()
+        .toBuffer();
+    } catch (err) {
+      logger.warn({ err, z, srcLeft, srcTop, srcW, srcH, dstW, dstH }, 'Failed to resize for zoom level');
+      continue;
+    }
+
+    const resized = new Uint8Array(resizedBuf.buffer, resizedBuf.byteOffset, resizedBuf.byteLength);
+
+    // Now slice individual 256x256 tiles from the resized grid
     const tileResults: Array<{ tile: typeof tiles[0]; pixels: Uint8Array } | null> = [];
 
     for (const tile of tiles) {
-      const tileBounds = tileToMercatorBounds(tile.z, tile.x, tile.y);
-      const tileW = tileBounds.east - tileBounds.west;
-      const tileH = tileBounds.north - tileBounds.south;
+      // Tile's position within the grid (pixel coords)
+      const tileGridX = (tile.x - minTileX) * 256;
+      const tileGridY = (tile.y - minTileY) * 256;
 
-      const clampedWest = Math.max(tileBounds.west, rasterLeft);
-      const clampedEast = Math.min(tileBounds.east, rasterRight);
-      const clampedNorth = Math.min(tileBounds.north, rasterTop);
-      const clampedSouth = Math.max(tileBounds.south, rasterBottom);
+      const pixels = new Uint8Array(256 * 256);
+      let hasData = false;
 
-      if (clampedWest >= clampedEast || clampedSouth >= clampedNorth) {
-        tileResults.push(null);
-        continue;
-      }
+      for (let row = 0; row < 256; row++) {
+        const gridY = tileGridY + row;
+        const srcRowY = gridY - dstTop;
+        if (srcRowY < 0 || srcRowY >= dstH) continue;
 
-      const srcXf = ((clampedWest - rasterLeft) / rasterMeterWidth) * rasterWidth;
-      const srcYf = ((rasterTop - clampedNorth) / rasterMeterHeight) * rasterHeight;
-      const srcWf = ((clampedEast - clampedWest) / rasterMeterWidth) * rasterWidth;
-      const srcHf = ((clampedNorth - clampedSouth) / rasterMeterHeight) * rasterHeight;
+        for (let col = 0; col < 256; col++) {
+          const gridX = tileGridX + col;
+          const srcColX = gridX - dstLeft;
+          if (srcColX < 0 || srcColX >= dstW) continue;
 
-      const fullyInside = clampedWest === tileBounds.west &&
-        clampedEast === tileBounds.east &&
-        clampedNorth === tileBounds.north &&
-        clampedSouth === tileBounds.south;
-
-      let pixels: Uint8Array;
-
-      if (fullyInside) {
-        pixels = sampleTile(rasterData, rasterWidth, rasterHeight, srcXf, srcYf, srcWf, srcHf, 256, 256);
-      } else {
-        const dstX = Math.round(((clampedWest - tileBounds.west) / tileW) * 256);
-        const dstY = Math.round(((tileBounds.north - clampedNorth) / tileH) * 256);
-        const dstW = Math.max(1, Math.round(((clampedEast - clampedWest) / tileW) * 256));
-        const dstH = Math.max(1, Math.round(((clampedNorth - clampedSouth) / tileH) * 256));
-
-        const region = sampleTile(rasterData, rasterWidth, rasterHeight, srcXf, srcYf, srcWf, srcHf, dstW, dstH);
-        pixels = new Uint8Array(256 * 256);
-        for (let row = 0; row < dstH && (dstY + row) < 256; row++) {
-          pixels.set(region.subarray(row * dstW, row * dstW + Math.min(dstW, 256 - dstX)), (dstY + row) * 256 + dstX);
+          const val = resized[srcRowY * dstW + srcColX];
+          if (val > 0) hasData = true;
+          pixels[row * 256 + col] = val;
         }
       }
 
-      if (isEmptyTile(pixels)) {
+      if (!hasData) {
         tileResults.push(null);
       } else {
         tileResults.push({ tile, pixels });
       }
     }
 
-    // Now encode PNGs in parallel batches (this is the slow part)
+    // Encode PNGs in parallel batches
     const validTiles = tileResults.filter((r): r is NonNullable<typeof r> => r !== null);
     skipped += tileResults.length - validTiles.length;
 
@@ -179,6 +161,8 @@ async function generateTiles(
     }
 
     tileCount += validTiles.length;
+
+    logger.debug({ z, tiles: tiles.length, generated: validTiles.length, resizeW: dstW, resizeH: dstH }, 'Zoom level complete');
   }
 
   return { tileCount, skipped };
