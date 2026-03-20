@@ -8,7 +8,6 @@
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #1a1a2e; }
-    .radar-layer .leaflet-tile { image-rendering: crisp-edges; }
     #map { width: 100vw; height: 100vh; }
     .controls {
       position: absolute;
@@ -127,7 +126,7 @@
     let currentFrame = null;
 
     // Init map centered on North America
-    const map = L.map('map', { zoomControl: false, maxZoom: 14 }).setView([42, -95], 5);
+    const map = L.map('map', { zoomControl: false, maxZoom: 12 }).setView([42, -95], 5);
     L.control.zoom({ position: 'bottomleft' }).addTo(map);
 
     // Dark basemap
@@ -168,7 +167,7 @@
       radarLayer = L.tileLayer(`${API}/tile/${currentFrame}/{z}/{x}/{y}?palette=${palette}&source=${source}`, {
         opacity,
         maxNativeZoom: 12,
-        maxZoom: 13,
+        maxZoom: 12,
         minZoom: 2,
         tileSize: 256,
         attribution: 'RadrView',
