@@ -126,7 +126,7 @@
     let currentFrame = null;
 
     // Init map centered on North America
-    const map = L.map('map', { zoomControl: false, maxZoom: 12 }).setView([42, -95], 5);
+    const map = L.map('map', { zoomControl: false }).setView([42, -95], 5);
     L.control.zoom({ position: 'bottomleft' }).addTo(map);
 
     // Dark basemap
@@ -167,7 +167,7 @@
       radarLayer = L.tileLayer(`${API}/tile/${currentFrame}/{z}/{x}/{y}?palette=${palette}&source=${source}`, {
         opacity,
         maxNativeZoom: 12,
-        maxZoom: 12,
+        maxZoom: 18,
         minZoom: 2,
         tileSize: 256,
         attribution: 'RadrView',
