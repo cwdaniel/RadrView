@@ -10,8 +10,9 @@ import { SOURCES } from '../config/sources.js';
 import type { IngestResult, TileResult } from '../types.js';
 
 const SOURCE = SOURCES.ec;
-const LAYER = SOURCE.product; // 'RADAR_1KM_RDBR'
-const EC_BOUNDS = SOURCE.bounds; // lat/lon bounds
+// Fetch both rain and snow layers and merge them
+const LAYERS = ['RADAR_1KM_RRAI', 'RADAR_1KM_RSNO'];
+const EC_BOUNDS = SOURCE.bounds;
 
 function lonToMercatorX(lon: number): number {
   return lon * 20037508.343 / 180;
@@ -49,7 +50,7 @@ export class EcIngester extends BaseIngester {
 
   async poll(): Promise<IngestResult[]> {
     // 1. Fetch available timestamps from WMS GetCapabilities
-    const isoTimestamps = await fetchGetCapabilities(LAYER);
+    const isoTimestamps = await fetchGetCapabilities(LAYERS[0]);
     this.logger.debug({ count: isoTimestamps.length }, 'EC timestamps available');
 
     if (isoTimestamps.length === 0) {
@@ -105,26 +106,37 @@ export class EcIngester extends BaseIngester {
             batch.map(async tile => {
               const tileBounds = tileToMercatorBounds(tile.z, tile.x, tile.y);
 
-              let pngBuffer: Buffer;
-              try {
-                pngBuffer = await fetchTilePng(LAYER, tileBounds, isoTimestamp);
-              } catch (err) {
-                this.logger.warn({ err, z: tile.z, x: tile.x, y: tile.y }, 'Failed to fetch EC tile, skipping');
-                return;
+              // Fetch both rain and snow layers, merge them
+              const merged = new Uint8Array(256 * 256);
+
+              for (const layer of LAYERS) {
+                let pngBuffer: Buffer;
+                try {
+                  pngBuffer = await fetchTilePng(layer, tileBounds, isoTimestamp);
+                } catch {
+                  continue; // Skip this layer if fetch fails
+                }
+
+                const { data: rgba, info } = await sharp(pngBuffer)
+                  .ensureAlpha()
+                  .raw()
+                  .toBuffer({ resolveWithObject: true });
+
+                const layerData = reverseMapTile(
+                  new Uint8Array(rgba.buffer, rgba.byteOffset, rgba.byteLength),
+                  info.width,
+                  info.height,
+                );
+
+                // Merge: take the higher value from either layer
+                for (let j = 0; j < merged.length && j < layerData.length; j++) {
+                  if (layerData[j] > merged[j]) {
+                    merged[j] = layerData[j];
+                  }
+                }
               }
 
-              // Read RGBA via sharp
-              const { data: rgba, info } = await sharp(pngBuffer)
-                .ensureAlpha()
-                .raw()
-                .toBuffer({ resolveWithObject: true });
-
-              // Reverse-map color values to single-channel pixel values
-              const singleChannel = reverseMapTile(
-                new Uint8Array(rgba.buffer, rgba.byteOffset, rgba.byteLength),
-                info.width,
-                info.height,
-              );
+              const singleChannel = merged;
 
               // Skip empty tiles
               let hasData = false;
@@ -138,7 +150,7 @@ export class EcIngester extends BaseIngester {
               await mkdir(path.dirname(tilePath), { recursive: true });
 
               await sharp(Buffer.from(singleChannel.buffer), {
-                raw: { width: info.width, height: info.height, channels: 1 },
+                raw: { width: 256, height: 256, channels: 1 },
               })
                 .png({ compressionLevel: 6, palette: false })
                 .toFile(tilePath);

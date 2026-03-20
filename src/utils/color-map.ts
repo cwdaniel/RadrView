@@ -6,10 +6,10 @@ interface ColorEntry {
   pixel: number;
 }
 
-// EC RADAR_1KM_RRAI color table — only actual radar precipitation colors.
-// Excludes gray/white which are cartographic features (borders, coastlines)
-// rendered by the WMS on top of radar data.
+// EC radar color table — covers both RRAI (rain) and RSNO (snow) layers.
+// Excludes gray/white which are cartographic features (borders, coastlines).
 const EC_COLOR_TABLE: ColorEntry[] = [
+  // Rain colors (RRAI layer — greens, yellows, reds)
   { rgb: [0, 255, 0], dbz: 15 },
   { rgb: [0, 200, 0], dbz: 20 },
   { rgb: [0, 144, 0], dbz: 25 },
@@ -21,6 +21,20 @@ const EC_COLOR_TABLE: ColorEntry[] = [
   { rgb: [144, 0, 0], dbz: 55 },
   { rgb: [255, 0, 255], dbz: 60 },
   { rgb: [144, 0, 255], dbz: 65 },
+  // Snow colors (RSNO layer — blues, cyans, purples)
+  { rgb: [0, 255, 255], dbz: 10 },
+  { rgb: [0, 200, 255], dbz: 15 },
+  { rgb: [0, 144, 255], dbz: 20 },
+  { rgb: [0, 100, 255], dbz: 25 },
+  { rgb: [0, 0, 255], dbz: 30 },
+  { rgb: [0, 0, 200], dbz: 35 },
+  { rgb: [0, 0, 144], dbz: 40 },
+  { rgb: [100, 0, 200], dbz: 45 },
+  { rgb: [150, 100, 255], dbz: 20 },
+  { rgb: [200, 150, 255], dbz: 15 },
+  // Light blue snow tones (not too close to white to avoid matching borders)
+  { rgb: [150, 200, 255], dbz: 10 },
+  { rgb: [170, 210, 255], dbz: 8 },
 ].map(e => ({ ...e, pixel: dbzToPixel(e.dbz) })) as ColorEntry[];
 
 // Maximum RGB distance squared to accept a color match.
