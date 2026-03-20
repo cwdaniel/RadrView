@@ -55,10 +55,25 @@ function sampleRegion(
       const v01 = src[y1 * srcW + x0];
       const v11 = src[y1 * srcW + x1];
 
-      const val = v00 * (1 - tx) * (1 - ty) +
-                  v10 * tx * (1 - ty) +
-                  v01 * (1 - tx) * ty +
-                  v11 * tx * ty;
+      // NoData-aware interpolation: only blend non-zero pixels.
+      // Prevents false-color halos at data/NoData boundaries.
+      let val: number;
+      const nonZero = [v00, v10, v01, v11].filter(v => v > 0);
+      if (nonZero.length === 0) {
+        val = 0;
+      } else if (nonZero.length < 4) {
+        // At NoData boundary — use nearest neighbor (closest non-zero)
+        const nearest = tx < 0.5
+          ? (ty < 0.5 ? v00 : v01)
+          : (ty < 0.5 ? v10 : v11);
+        val = nearest;
+      } else {
+        // All 4 neighbors have data — safe to bilinear blend
+        val = v00 * (1 - tx) * (1 - ty) +
+              v10 * tx * (1 - ty) +
+              v01 * (1 - tx) * ty +
+              v11 * tx * ty;
+      }
 
       out[dy * dstW + dx] = Math.round(val);
     }
