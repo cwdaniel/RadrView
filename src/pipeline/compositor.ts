@@ -11,24 +11,23 @@ import type { TileResult } from '../types.js';
 const logger = createLogger('compositor');
 
 const QUEUE_KEY = 'queue:composite';
+const CLOSE_THRESHOLD_MS = 2 * 60 * 1000;
 
-// Source priority — higher value = higher priority
+// All source names from config
+const SOURCE_NAMES = Object.values(SOURCES).map(s => s.name);
 const SOURCE_PRIORITY: Record<string, number> = Object.fromEntries(
-  Object.entries(SOURCES).map(([, s]) => [s.name, s.priority]),
+  Object.values(SOURCES).map(s => [s.name, s.priority]),
 );
 
-/** Convert longitude to EPSG:3857 X */
 function lonToMercatorX(lon: number): number {
   return lon * 20037508.343 / 180;
 }
 
-/** Convert latitude to EPSG:3857 Y */
 function latToMercatorY(lat: number): number {
   const latRad = lat * Math.PI / 180;
   return Math.log(Math.tan(Math.PI / 4 + latRad / 2)) * 20037508.343 / Math.PI;
 }
 
-/** Check if a file exists on disk */
 async function fileExists(filePath: string): Promise<boolean> {
   try {
     await access(filePath);
@@ -38,50 +37,11 @@ async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
-/** Merge two single-channel 256x256 pixel buffers.
- *
- * Per-pixel rules:
- *  - both zero → 0
- *  - only one non-zero → use that value
- *  - both non-zero → prefer higher-priority source; if timestamps within 2 min,
- *    prefer higher priority, else prefer the newer source.
- */
-function mergePixels(
-  mrmsData: Buffer,
-  ecData: Buffer,
-  mrmsEpochMs: number,
-  ecEpochMs: number,
-): Uint8Array {
-  const len = mrmsData.length;
-  const output = new Uint8Array(len);
-  const mrmsPriority = SOURCE_PRIORITY['mrms'] ?? 0;
-  const ecPriority = SOURCE_PRIORITY['ec'] ?? 0;
-  const timeDiffMs = Math.abs(mrmsEpochMs - ecEpochMs);
-  const CLOSE_THRESHOLD_MS = 2 * 60 * 1000; // 2 minutes
-
-  for (let i = 0; i < len; i++) {
-    const a = mrmsData[i]; // mrms pixel
-    const b = ecData[i];   // ec pixel
-
-    if (a === 0 && b === 0) {
-      output[i] = 0;
-    } else if (a === 0) {
-      output[i] = b;
-    } else if (b === 0) {
-      output[i] = a;
-    } else {
-      // Both non-zero — choose based on priority or recency
-      if (timeDiffMs <= CLOSE_THRESHOLD_MS) {
-        // Prefer higher-priority source
-        output[i] = mrmsPriority >= ecPriority ? a : b;
-      } else {
-        // Prefer the newer source
-        output[i] = mrmsEpochMs >= ecEpochMs ? a : b;
-      }
-    }
-  }
-
-  return output;
+interface SourceFrame {
+  name: string;
+  timestamp: string;
+  epochMs: number;
+  priority: number;
 }
 
 async function compositeFrame(redis: Redis, message: string): Promise<void> {
@@ -91,78 +51,106 @@ async function compositeFrame(redis: Redis, message: string): Promise<void> {
   logger.info({ timestamp, source: trigger.source }, 'Compositing frame');
   const start = Date.now();
 
-  // 1. Get the latest timestamps for each source
-  const latestMrms = await redis.get('latest:mrms');
-  const latestEc = await redis.get('latest:ec');
+  // 1. Get latest frame from each source
+  const sourceFrames: SourceFrame[] = [];
+  for (const name of SOURCE_NAMES) {
+    const latest = await redis.get(`latest:${name}`);
+    if (latest) {
+      sourceFrames.push({
+        name,
+        timestamp: latest,
+        epochMs: parseTimestampToEpoch(latest),
+        priority: SOURCE_PRIORITY[name] ?? 0,
+      });
+    }
+  }
 
-  if (!latestMrms && !latestEc) {
+  if (sourceFrames.length === 0) {
     logger.warn({ timestamp }, 'No source data available, skipping composite');
     return;
   }
 
-  // Parse epoch values for merge logic
-  const mrmsEpochMs = latestMrms ? parseTimestampToEpoch(latestMrms) : 0;
-  const ecEpochMs = latestEc ? parseTimestampToEpoch(latestEc) : 0;
-
   const outputBaseDir = path.join(config.dataDir, 'tiles', 'composite', timestamp);
-
   let totalTileCount = 0;
 
-  // 2. For each zoom level, calculate union bounds of all sources
+  // 2. Calculate union bounds of all active sources
+  let unionWest = Infinity;
+  let unionEast = -Infinity;
+  let unionNorth = -Infinity;
+  let unionSouth = Infinity;
+
+  for (const source of Object.values(SOURCES)) {
+    // Only include sources that have data
+    if (!sourceFrames.find(sf => sf.name === source.name)) continue;
+    const w = lonToMercatorX(source.bounds.west);
+    const e = lonToMercatorX(source.bounds.east);
+    const n = latToMercatorY(source.bounds.north);
+    const s = latToMercatorY(source.bounds.south);
+    if (w < unionWest) unionWest = w;
+    if (e > unionEast) unionEast = e;
+    if (n > unionNorth) unionNorth = n;
+    if (s < unionSouth) unionSouth = s;
+  }
+
+  // 3. For each zoom level, merge tiles from all sources
   for (let z = config.zoomMin; z <= config.zoomMax; z++) {
-    // Union bounds of all sources in mercator
-    let unionWest = Infinity;
-    let unionEast = -Infinity;
-    let unionNorth = -Infinity;
-    let unionSouth = Infinity;
-
-    for (const source of Object.values(SOURCES)) {
-      const w = lonToMercatorX(source.bounds.west);
-      const e = lonToMercatorX(source.bounds.east);
-      const n = latToMercatorY(source.bounds.north);
-      const s = latToMercatorY(source.bounds.south);
-      if (w < unionWest) unionWest = w;
-      if (e > unionEast) unionEast = e;
-      if (n > unionNorth) unionNorth = n;
-      if (s < unionSouth) unionSouth = s;
-    }
-
     const tiles = getTilesForBounds(z, unionWest, unionNorth, unionEast, unionSouth);
 
     for (const tile of tiles) {
       const { z: tz, x, y } = tile;
 
-      const mrmsTilePath = latestMrms
-        ? path.join(config.dataDir, 'tiles', 'mrms', latestMrms, String(tz), String(x), `${y}.png`)
-        : null;
-      const ecTilePath = latestEc
-        ? path.join(config.dataDir, 'tiles', 'ec', latestEc, String(tz), String(x), `${y}.png`)
-        : null;
+      // Find which sources have a tile at this location
+      const available: Array<{ frame: SourceFrame; tilePath: string }> = [];
+      for (const frame of sourceFrames) {
+        const tilePath = path.join(
+          config.dataDir, 'tiles', frame.name, frame.timestamp,
+          String(tz), String(x), `${y}.png`,
+        );
+        if (await fileExists(tilePath)) {
+          available.push({ frame, tilePath });
+        }
+      }
 
-      const mrmsExists = mrmsTilePath ? await fileExists(mrmsTilePath) : false;
-      const ecExists = ecTilePath ? await fileExists(ecTilePath) : false;
-
-      if (!mrmsExists && !ecExists) continue;
+      if (available.length === 0) continue;
 
       const outPath = path.join(outputBaseDir, String(tz), String(x), `${y}.png`);
       await mkdir(path.dirname(outPath), { recursive: true });
 
-      if (mrmsExists && !ecExists) {
-        // Only MRMS — copy directly
-        await copyFile(mrmsTilePath!, outPath);
-      } else if (!mrmsExists && ecExists) {
-        // Only EC — copy directly
-        await copyFile(ecTilePath!, outPath);
+      if (available.length === 1) {
+        // Single source — just copy
+        await copyFile(available[0].tilePath, outPath);
       } else {
-        // Both exist — merge pixel-by-pixel
-        const [mrmsRaw, ecRaw] = await Promise.all([
-          sharp(mrmsTilePath!).raw().toBuffer(),
-          sharp(ecTilePath!).raw().toBuffer(),
-        ]);
+        // Multiple sources overlap — merge pixel-by-pixel
+        // Read all tile buffers
+        const buffers = await Promise.all(
+          available.map(async a => ({
+            data: await sharp(a.tilePath).grayscale().raw().toBuffer(),
+            frame: a.frame,
+          })),
+        );
 
-        const merged = mergePixels(mrmsRaw, ecRaw, mrmsEpochMs, ecEpochMs);
+        // Start with the lowest priority, overlay higher priority on top
+        buffers.sort((a, b) => a.frame.priority - b.frame.priority);
 
-        await sharp(Buffer.from(merged.buffer), {
+        const output = new Uint8Array(256 * 256);
+        for (const buf of buffers) {
+          const pixels = new Uint8Array(buf.data.buffer, buf.data.byteOffset, buf.data.byteLength);
+          for (let i = 0; i < 256 * 256 && i < pixels.length; i++) {
+            if (pixels[i] > 0) {
+              // Non-zero pixel from this source
+              if (output[i] === 0) {
+                // No existing data — use this
+                output[i] = pixels[i];
+              } else {
+                // Both have data — higher priority wins (we sorted ascending,
+                // so later iterations are higher priority and overwrite)
+                output[i] = pixels[i];
+              }
+            }
+          }
+        }
+
+        await sharp(Buffer.from(output.buffer), {
           raw: { width: 256, height: 256, channels: 1 },
         })
           .png({ compressionLevel: 6, palette: false })
@@ -174,9 +162,9 @@ async function compositeFrame(redis: Redis, message: string): Promise<void> {
   }
 
   const durationMs = Date.now() - start;
-  logger.info({ timestamp, totalTileCount, durationMs }, 'Composite complete');
+  logger.info({ timestamp, totalTileCount, durationMs, sources: sourceFrames.map(s => s.name) }, 'Composite complete');
 
-  // 3. Record composite frame metadata in Redis
+  // 4. Record composite frame in Redis
   await redis.zadd('frames:composite', epochMs, timestamp);
   await redis.hset(`frame:composite:${timestamp}`, {
     source: 'composite',
@@ -184,12 +172,9 @@ async function compositeFrame(redis: Redis, message: string): Promise<void> {
     tileCount: String(totalTileCount),
     zoomMin: String(config.zoomMin),
     zoomMax: String(config.zoomMax),
-    latestMrms: latestMrms ?? '',
-    latestEc: latestEc ?? '',
   });
   await redis.set('latest:composite', timestamp);
 
-  // Notify server (WebSocket) that a new composite frame is ready
   await redis.publish('new-frame', JSON.stringify({
     type: 'new-frame',
     timestamp,
@@ -198,7 +183,6 @@ async function compositeFrame(redis: Redis, message: string): Promise<void> {
   }));
 }
 
-/** Parse YYYYMMDDHHMMSS timestamp to Unix epoch milliseconds */
 function parseTimestampToEpoch(ts: string): number {
   const year = parseInt(ts.slice(0, 4));
   const month = parseInt(ts.slice(4, 6)) - 1;
@@ -221,12 +205,11 @@ async function main(): Promise<void> {
   process.on('SIGTERM', shutdown);
   process.on('SIGINT', shutdown);
 
-  logger.info('Compositor worker started, polling queue:composite');
+  logger.info({ sources: SOURCE_NAMES }, 'Compositor worker started, polling queue:composite');
 
   while (running) {
-    // BLPOP with 5-second timeout so we can check the running flag
     const result = await redis.blpop(QUEUE_KEY, 5);
-    if (!result) continue; // timeout, check running flag
+    if (!result) continue;
 
     const [, message] = result;
 
