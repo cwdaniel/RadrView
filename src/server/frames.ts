@@ -53,7 +53,11 @@ export function createFramesRouter(redis: Redis): Router {
       return;
     }
 
-    const meta = await redis.hgetall(`frame:${latest}`);
+    // Check source-prefixed key first (composites), then unprefixed (individual sources)
+    let meta = await redis.hgetall(`frame:${source}:${latest}`);
+    if (!meta.epochMs) {
+      meta = await redis.hgetall(`frame:${latest}`);
+    }
     res.json({
       timestamp: latest,
       epochMs: parseInt(meta.epochMs || '0'),
