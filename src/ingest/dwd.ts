@@ -47,7 +47,7 @@ async function normalizeDwd(inputPath: string, outputPath: string): Promise<void
   // Non-zero values represent precipitation intensity.
   await execFileAsync('gdal_translate', [
     '-ot', 'Byte',
-    '-scale', '0', '50000', '1', '255',  // raw values 0-50000 → 0-50 mm/h → byte 1-255
+    '-scale', '0.01', '15', '1', '255',  // 0.01-15 mm/h (GDAL applies HDF5 gain) → byte 1-255
     '-a_nodata', '0',
     '-co', 'COMPRESS=LZW',
     reprojected,
