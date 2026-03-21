@@ -56,7 +56,7 @@ export const SOURCES: Record<string, SourceConfig> = {
   },
   ec: {
     name: 'ec',
-    bounds: { west: -141, south: 41, east: -52, north: 84 },
+    bounds: { west: -141, south: 41, east: -50, north: 84 },
     priority: 1,
     pollIntervalMs: 60_000,
     product: 'RADAR_1KM_RRAI',
@@ -100,7 +100,7 @@ export const SOURCES: Record<string, SourceConfig> = {
   },
   'ec-type': {
     name: 'ec-type',
-    bounds: { west: -141, south: 41, east: -52, north: 84 },
+    bounds: { west: -141, south: 41, east: -50, north: 84 },
     priority: 1,
     pollIntervalMs: 60_000,
     product: 'PrecipFlag',
