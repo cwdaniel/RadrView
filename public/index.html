@@ -191,38 +191,68 @@
       document.getElementById('legend').src = `${API}/palette/${palette}/legend`;
     }
 
-    // Dual-layer system: "front" (visible) and "back" (preloading next frame)
+    // Dual-layer crossfade system with preloading
     let frontLayer = null;
     let backLayer = null;
     let preloadedFrame = null;
+    let fadeAnim = null;
+    const FADE_DURATION = 400; // ms
 
-    function addRadarLayer() {
-      if (!currentFrame) return;
-
+    function makeLayer(timestamp) {
       const palette = document.getElementById('palette').value;
       const source = document.getElementById('source').value;
-      const targetOpacity = document.getElementById('opacity').value / 100;
-
-      // If we already preloaded this frame, just swap it to front
-      if (backLayer && preloadedFrame === currentFrame) {
-        if (frontLayer) map.removeLayer(frontLayer);
-        frontLayer = backLayer;
-        frontLayer.setOpacity(targetOpacity);
-        backLayer = null;
-        preloadedFrame = null;
-        return;
-      }
-
-      // No preload available — create and show immediately
-      const newLayer = L.tileLayer(`${API}/tile/${currentFrame}/{z}/{x}/{y}?palette=${palette}&source=${source}`, {
-        opacity: targetOpacity,
+      return L.tileLayer(`${API}/tile/${timestamp}/{z}/{x}/{y}?palette=${palette}&source=${source}`, {
+        opacity: 0,
         maxNativeZoom: 12,
         maxZoom: 18,
         minZoom: 2,
         tileSize: 256,
         attribution: 'RadrView',
-      }).addTo(map);
+      });
+    }
 
+    function addRadarLayer() {
+      if (!currentFrame) return;
+      const targetOpacity = document.getElementById('opacity').value / 100;
+
+      // Cancel any in-progress fade
+      if (fadeAnim) { cancelAnimationFrame(fadeAnim); fadeAnim = null; }
+
+      // If we preloaded this frame, crossfade from front → back
+      if (backLayer && preloadedFrame === currentFrame) {
+        const oldFront = frontLayer;
+        const newFront = backLayer;
+        backLayer = null;
+        preloadedFrame = null;
+        frontLayer = newFront;
+        radarLayer = newFront;
+
+        // Smooth crossfade using requestAnimationFrame
+        const startTime = performance.now();
+        function animate(now) {
+          const t = Math.min((now - startTime) / FADE_DURATION, 1);
+          // Ease in-out cubic
+          const ease = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+
+          newFront.setOpacity(ease * targetOpacity);
+          if (oldFront) oldFront.setOpacity((1 - ease) * targetOpacity);
+
+          if (t < 1) {
+            fadeAnim = requestAnimationFrame(animate);
+          } else {
+            // Fade complete — remove old layer
+            if (oldFront) map.removeLayer(oldFront);
+            fadeAnim = null;
+          }
+        }
+        fadeAnim = requestAnimationFrame(animate);
+        return;
+      }
+
+      // No preload — hard swap (first frame or palette/source change)
+      const newLayer = makeLayer(currentFrame);
+      newLayer.setOpacity(targetOpacity);
+      newLayer.addTo(map);
       if (frontLayer) map.removeLayer(frontLayer);
       frontLayer = newLayer;
       radarLayer = newLayer;
@@ -231,19 +261,11 @@
     function preloadFrame(timestamp) {
       if (!timestamp || timestamp === preloadedFrame) return;
 
-      const palette = document.getElementById('palette').value;
-      const source = document.getElementById('source').value;
-
       // Remove old preload
       if (backLayer) { map.removeLayer(backLayer); backLayer = null; }
 
-      backLayer = L.tileLayer(`${API}/tile/${timestamp}/{z}/{x}/{y}?palette=${palette}&source=${source}`, {
-        opacity: 0,
-        maxNativeZoom: 12,
-        maxZoom: 18,
-        minZoom: 2,
-        tileSize: 256,
-      }).addTo(map);
+      backLayer = makeLayer(timestamp);
+      backLayer.addTo(map); // Added at opacity 0 — tiles load invisibly
       preloadedFrame = timestamp;
     }
 
