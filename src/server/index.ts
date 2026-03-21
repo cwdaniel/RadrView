@@ -9,7 +9,7 @@ import { config } from '../config/env.js';
 import { createLogger } from '../utils/logger.js';
 import { createFramesRouter } from './frames.js';
 import { createHealthRouter } from './health.js';
-import { loadPalettes, getLUT, colorizeTilePng, createPaletteRouter } from './palette.js';
+import { loadPalettes, getLUT, isTypedPalette, colorizeTilePng, colorizePrecipType, createPaletteRouter } from './palette.js';
 import { getUpscaledTile, isUpscalerAvailable } from './upscale.js';
 import { createMetricsRouter, recordCacheHit, recordCacheMiss, recordServeDuration } from './metrics.js';
 
@@ -112,7 +112,27 @@ export function createApp(redis: Redis): { app: ReturnType<typeof express> } {
     }
 
     const grayscalePng = readFileSync(tilePath);
-    const colorized = await colorizeTilePng(grayscalePng, lut);
+
+    let colorized: Buffer;
+
+    if (isTypedPalette(paletteName)) {
+      // For typed palettes (e.g. precip-type), also read the type tile from {source}-type
+      const typeSource = `${source}-type`;
+      const typeTilePath = path.join(
+        config.dataDir, 'tiles', typeSource, timestamp, z, x, `${y}.png`,
+      );
+      if (existsSync(typeTilePath)) {
+        const typePng = readFileSync(typeTilePath);
+        colorized = await colorizePrecipType(grayscalePng, typePng);
+      } else {
+        // Fall back to default palette if type tile not available
+        const defaultLut = getLUT('default');
+        colorized = await colorizeTilePng(grayscalePng, defaultLut ?? lut);
+      }
+    } else {
+      colorized = await colorizeTilePng(grayscalePng, lut);
+    }
+
     tileCache.set(cacheKey, colorized);
 
     res.setHeader('Content-Type', 'image/png');

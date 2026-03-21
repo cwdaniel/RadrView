@@ -16,18 +16,23 @@ if (!REGION) {
   process.exit(1);
 }
 
+// Support MRMS_PRODUCT=type for PrecipFlag ingestion
+const IS_TYPE_PRODUCT = process.env.MRMS_PRODUCT === 'type';
+const PRODUCT = IS_TYPE_PRODUCT ? 'PrecipFlag_00.00' : REGION.product;
+const SOURCE_NAME = IS_TYPE_PRODUCT ? `${REGION.name}-type` : REGION.name;
+
 function getDatePrefixes(): string[] {
   const now = new Date();
   const today = now.toISOString().slice(0, 10).replace(/-/g, '');
   const yesterday = new Date(now.getTime() - 86400000).toISOString().slice(0, 10).replace(/-/g, '');
   return [
-    `${REGION.s3Prefix}/${REGION.product}/${today}/`,
-    `${REGION.s3Prefix}/${REGION.product}/${yesterday}/`,
+    `${REGION.s3Prefix}/${PRODUCT}/${today}/`,
+    `${REGION.s3Prefix}/${PRODUCT}/${yesterday}/`,
   ];
 }
 
 export class MrmsIngester extends BaseIngester {
-  readonly source = REGION.name;
+  readonly source = SOURCE_NAME;
   readonly pollIntervalMs = 30_000;
 
   async poll(): Promise<IngestResult[]> {
@@ -37,7 +42,7 @@ export class MrmsIngester extends BaseIngester {
       const keys = await listObjects(prefix);
       allKeys.push(...keys);
     }
-    this.logger.debug({ count: allKeys.length, region: REGION_KEY }, 'Listed S3 objects');
+    this.logger.debug({ count: allKeys.length, region: REGION_KEY, product: PRODUCT }, 'Listed S3 objects');
 
     const gribKeys = allKeys
       .filter(k => k.endsWith('.grib2.gz'))
@@ -58,43 +63,44 @@ export class MrmsIngester extends BaseIngester {
       return [];
     }
 
-    this.logger.info({ count: newKeys.length, region: REGION_KEY }, 'Found new MRMS files');
+    this.logger.info({ count: newKeys.length, region: REGION_KEY, product: PRODUCT }, 'Found new MRMS files');
     const results: IngestResult[] = [];
 
     for (const key of newKeys) {
       const start = Date.now();
       const { timestamp, epochMs } = parseTimestamp(key);
 
-      const rawDir = path.join(config.dataDir, 'raw', REGION.name);
+      const rawDir = path.join(config.dataDir, 'raw', SOURCE_NAME);
       const decompressedPath = path.join(rawDir, `${timestamp}.grib2`);
 
       this.logger.info({ key, timestamp }, 'Downloading MRMS file');
       const fileSize = await downloadAndGunzip(key, decompressedPath);
 
       const normalizedPath = path.join(
-        config.dataDir, 'normalized', REGION.name, `${timestamp}.tif`,
+        config.dataDir, 'normalized', SOURCE_NAME, `${timestamp}.tif`,
       );
 
       this.logger.info({ timestamp }, 'Normalizing');
       await normalizeGrib({
         inputPath: decompressedPath,
         outputPath: normalizedPath,
+        skipScale: IS_TYPE_PRODUCT,
       });
 
       await unlink(decompressedPath).catch(() => {});
       await this.markProcessed(key);
 
       const processingMs = Date.now() - start;
-      this.logger.info({ timestamp, processingMs, region: REGION_KEY }, 'MRMS frame ingested');
+      this.logger.info({ timestamp, processingMs, region: REGION_KEY, product: PRODUCT }, 'MRMS frame ingested');
 
       results.push({
         timestamp,
         epochMs,
-        source: REGION.name,
+        source: SOURCE_NAME,
         normalizedPath,
         bounds: REGION.bounds,
         metadata: {
-          product: REGION.product,
+          product: PRODUCT,
           resolution: 1000,
           projection: 'EPSG:4326',
           fileSize,

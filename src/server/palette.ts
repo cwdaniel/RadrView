@@ -19,11 +19,21 @@ export interface PaletteDefinition {
   stops: PaletteStop[];
 }
 
+export interface TypedPaletteDefinition {
+  name: string;
+  description: string;
+  typed: true;
+  types: Record<string, { label: string; stops: PaletteStop[] }>;
+}
+
 export interface PaletteLUT {
   name: string;
   description: string;
   table: Uint8Array; // 256 * 4 = 1024 bytes
 }
+
+// Per-type LUTs for typed palettes: typeCode -> 256-entry RGBA table
+const typedPaletteLUTs = new Map<string, Map<number, Uint8Array>>();
 
 export function interpolateColor(
   stops: PaletteStop[],
@@ -83,15 +93,52 @@ const paletteLUTs = new Map<string, PaletteLUT>();
 const legendCache = new Map<string, Buffer>();
 let paletteList: Array<{ name: string; description: string }> = [];
 
+export function buildTypedLUTs(def: TypedPaletteDefinition): Map<number, Uint8Array> {
+  const lutMap = new Map<number, Uint8Array>();
+  for (const [typeKey, typeDef] of Object.entries(def.types)) {
+    const typeCode = parseInt(typeKey, 10);
+    const table = new Uint8Array(256 * 4);
+    // Index 0 = NoData = transparent
+    table[0] = 0; table[1] = 0; table[2] = 0; table[3] = 0;
+    for (let i = 1; i < 256; i++) {
+      const dbz = pixelToDbz(i);
+      const color = interpolateColor(typeDef.stops, dbz);
+      table[i * 4 + 0] = color[0];
+      table[i * 4 + 1] = color[1];
+      table[i * 4 + 2] = color[2];
+      table[i * 4 + 3] = color[3];
+    }
+    lutMap.set(typeCode, table);
+  }
+  return lutMap;
+}
+
 export function loadPalettes(palettesDir: string): void {
   const files = readdirSync(palettesDir).filter(f => f.endsWith('.json'));
 
   for (const file of files) {
     const raw = readFileSync(path.join(palettesDir, file), 'utf-8');
-    const def: PaletteDefinition = JSON.parse(raw);
-    const lut = buildLUT(def);
-    paletteLUTs.set(def.name, lut);
-    logger.info({ palette: def.name, stops: def.stops.length }, 'Loaded palette');
+    const parsed = JSON.parse(raw) as PaletteDefinition | TypedPaletteDefinition;
+
+    if ('typed' in parsed && parsed.typed) {
+      // Typed palette — build per-type LUTs; register a stub in paletteLUTs for list/legend
+      const typedDef = parsed as TypedPaletteDefinition;
+      const lutMap = buildTypedLUTs(typedDef);
+      typedPaletteLUTs.set(typedDef.name, lutMap);
+      // Register a stub LUT so the palette appears in the list and cache lookups don't crash
+      const stubTable = new Uint8Array(256 * 4);
+      paletteLUTs.set(typedDef.name, {
+        name: typedDef.name,
+        description: typedDef.description,
+        table: stubTable,
+      });
+      logger.info({ palette: typedDef.name, types: Object.keys(typedDef.types).length }, 'Loaded typed palette');
+    } else {
+      const def = parsed as PaletteDefinition;
+      const lut = buildLUT(def);
+      paletteLUTs.set(def.name, lut);
+      logger.info({ palette: def.name, stops: def.stops.length }, 'Loaded palette');
+    }
   }
 
   paletteList = Array.from(paletteLUTs.values()).map(l => ({
@@ -106,8 +153,75 @@ export function getLUT(name: string): PaletteLUT | undefined {
   return paletteLUTs.get(name);
 }
 
+export function getTypedLUTs(name: string): Map<number, Uint8Array> | undefined {
+  return typedPaletteLUTs.get(name);
+}
+
+export function isTypedPalette(name: string): boolean {
+  return typedPaletteLUTs.has(name);
+}
+
 export function getPaletteList(): Array<{ name: string; description: string }> {
   return paletteList;
+}
+
+export async function colorizePrecipType(
+  grayscalePng: Buffer,
+  typePng: Buffer,
+): Promise<Buffer> {
+  const lutMap = typedPaletteLUTs.get('precip-type');
+  if (!lutMap) throw new Error('precip-type palette not loaded');
+
+  // Decode dBZ tile (single channel grayscale)
+  const { data: dbzData, info: dbzInfo } = await sharp(grayscalePng)
+    .grayscale()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  // Decode type tile (single channel — raw flag codes 0-7)
+  const { data: typeData } = await sharp(typePng)
+    .grayscale()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  const pixelCount = dbzInfo.width * dbzInfo.height;
+  const rgba = new Uint8Array(pixelCount * 4);
+
+  for (let i = 0; i < pixelCount; i++) {
+    const dbzPixel = dbzData[i];
+    const typeCode = typeData[i];
+
+    if (dbzPixel === 0 || typeCode === 0) {
+      // No data — transparent
+      rgba[i * 4 + 0] = 0;
+      rgba[i * 4 + 1] = 0;
+      rgba[i * 4 + 2] = 0;
+      rgba[i * 4 + 3] = 0;
+      continue;
+    }
+
+    const typeLut = lutMap.get(typeCode);
+    if (!typeLut) {
+      // Unknown type code — transparent
+      rgba[i * 4 + 0] = 0;
+      rgba[i * 4 + 1] = 0;
+      rgba[i * 4 + 2] = 0;
+      rgba[i * 4 + 3] = 0;
+      continue;
+    }
+
+    const offset = dbzPixel * 4;
+    rgba[i * 4 + 0] = typeLut[offset + 0];
+    rgba[i * 4 + 1] = typeLut[offset + 1];
+    rgba[i * 4 + 2] = typeLut[offset + 2];
+    rgba[i * 4 + 3] = typeLut[offset + 3];
+  }
+
+  return sharp(Buffer.from(rgba), {
+    raw: { width: dbzInfo.width, height: dbzInfo.height, channels: 4 },
+  })
+    .png({ compressionLevel: 6 })
+    .toBuffer();
 }
 
 export async function colorizeTilePng(

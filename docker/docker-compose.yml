@@ -53,6 +53,60 @@ services:
     depends_on:
       - redis
 
+  ingest-mrms-type:
+    container_name: radrview-ingest-mrms-type
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: ["node", "dist/ingest/mrms.js"]
+    volumes:
+      - ../data:/data
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - DATA_DIR=/data
+      - LOG_LEVEL=info
+      - MRMS_REGION=conus
+      - MRMS_PRODUCT=type
+    restart: unless-stopped
+    depends_on:
+      - redis
+
+  ingest-mrms-alaska-type:
+    container_name: radrview-ingest-mrms-alaska-type
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: ["node", "dist/ingest/mrms.js"]
+    volumes:
+      - ../data:/data
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - DATA_DIR=/data
+      - LOG_LEVEL=info
+      - MRMS_REGION=alaska
+      - MRMS_PRODUCT=type
+    restart: unless-stopped
+    depends_on:
+      - redis
+
+  ingest-mrms-hawaii-type:
+    container_name: radrview-ingest-mrms-hawaii-type
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: ["node", "dist/ingest/mrms.js"]
+    volumes:
+      - ../data:/data
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - DATA_DIR=/data
+      - LOG_LEVEL=info
+      - MRMS_REGION=hawaii
+      - MRMS_PRODUCT=type
+    restart: unless-stopped
+    depends_on:
+      - redis
+
   tiler-1:
     container_name: radrview-tiler-1
     build:

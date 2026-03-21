@@ -94,6 +94,8 @@ export class EcIngester extends BaseIngester {
 
       this.logger.info({ timestamp }, 'Fetching EC tiles');
 
+      const typeTileDir = path.join(config.dataDir, 'tiles', 'ec-type', timestamp);
+
       // 4. For each zoom level, fetch tiles in batches of 10
       for (let z = config.zoomMin; z <= config.zoomMax; z++) {
         const tiles = getTilesForBounds(z, mercWest, mercNorth, mercEast, mercSouth);
@@ -108,6 +110,10 @@ export class EcIngester extends BaseIngester {
 
               // Fetch both rain and snow layers, merge them
               const merged = new Uint8Array(256 * 256);
+              // Track per-pixel layer contributions for type tile
+              // rainPixels[j] > 0 means RRAI had data; snowPixels[j] > 0 means RSNO had data
+              const rainPixels = new Uint8Array(256 * 256);
+              const snowPixels = new Uint8Array(256 * 256);
 
               for (const layer of LAYERS) {
                 let pngBuffer: Buffer;
@@ -128,8 +134,17 @@ export class EcIngester extends BaseIngester {
                   info.height,
                 );
 
-                // Merge: take the higher value from either layer
+                const isSnow = layer === 'RADAR_1KM_RSNO';
+
+                // Merge: take the higher value from either layer; track which layer
                 for (let j = 0; j < merged.length && j < layerData.length; j++) {
+                  if (layerData[j] > 0) {
+                    if (isSnow) {
+                      snowPixels[j] = layerData[j];
+                    } else {
+                      rainPixels[j] = layerData[j];
+                    }
+                  }
                   if (layerData[j] > merged[j]) {
                     merged[j] = layerData[j];
                   }
@@ -145,7 +160,7 @@ export class EcIngester extends BaseIngester {
               }
               if (!hasData) return;
 
-              // Write single-channel PNG
+              // Write single-channel dBZ PNG
               const tilePath = path.join(tileDir, String(tile.z), String(tile.x), `${tile.y}.png`);
               await mkdir(path.dirname(tilePath), { recursive: true });
 
@@ -154,6 +169,27 @@ export class EcIngester extends BaseIngester {
               })
                 .png({ compressionLevel: 6, palette: false })
                 .toFile(tilePath);
+
+              // Build type tile: 0=none, 1=rain, 2=snow (snow takes precedence)
+              const typePixels = new Uint8Array(256 * 256);
+              for (let j = 0; j < typePixels.length; j++) {
+                if (snowPixels[j] > 0) {
+                  typePixels[j] = 2; // snow (takes precedence over rain)
+                } else if (rainPixels[j] > 0) {
+                  typePixels[j] = 1; // rain
+                }
+                // else 0 (no precip)
+              }
+
+              // Write type PNG
+              const typeTilePath = path.join(typeTileDir, String(tile.z), String(tile.x), `${tile.y}.png`);
+              await mkdir(path.dirname(typeTilePath), { recursive: true });
+
+              await sharp(Buffer.from(typePixels.buffer), {
+                raw: { width: 256, height: 256, channels: 1 },
+              })
+                .png({ compressionLevel: 6, palette: false })
+                .toFile(typeTilePath);
 
               tileCount++;
             }),
@@ -175,6 +211,10 @@ export class EcIngester extends BaseIngester {
       });
       await this.redis.set('latest:ec', timestamp);
 
+      // Also record ec-type frame metadata
+      await this.redis.zadd('frames:ec-type', epochMs, timestamp);
+      await this.redis.set('latest:ec-type', timestamp);
+
       // Mark as processed
       await this.markProcessed(timestamp);
 
@@ -190,6 +230,19 @@ export class EcIngester extends BaseIngester {
       };
       await this.redis.rpush(this.queueKey, JSON.stringify(tileResult));
       this.logger.info({ timestamp }, 'Pushed EC TileResult to queue:composite');
+
+      // Also push type TileResult to queue:composite
+      const typeTileResult: TileResult = {
+        source: 'ec-type',
+        timestamp,
+        epochMs,
+        tileDir: typeTileDir,
+        tileCount,
+        skipped: 0,
+        bounds: EC_BOUNDS,
+      };
+      await this.redis.rpush(this.queueKey, JSON.stringify(typeTileResult));
+      this.logger.info({ timestamp }, 'Pushed EC type TileResult to queue:composite');
     }
 
     // Return empty array — BaseIngester won't push anything to the queue
