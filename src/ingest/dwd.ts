@@ -1,7 +1,8 @@
 /**
  * DWD (Germany) Radar Ingester
  * Downloads RADOLAN composites from https://opendata.dwd.de/weather/radar/composite/rv/
- * Format: tar files containing HDF5 in polar stereographic → reproject to EPSG:3857
+ * Format: tar files containing HDF5 in polar stereographic
+ * Values are precipitation rate (mm/h) — converted to dBZ via Marshall-Palmer Z-R relationship
  */
 import path from 'node:path';
 import { createWriteStream } from 'node:fs';
@@ -10,7 +11,9 @@ import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import sharp from 'sharp';
 import { BaseIngester } from './base.js';
+import { dbzToPixel } from '../utils/geo.js';
 import { config } from '../config/env.js';
 import { SOURCES } from '../config/sources.js';
 import type { IngestResult } from '../types.js';
@@ -18,43 +21,110 @@ import type { IngestResult } from '../types.js';
 const execFileAsync = promisify(execFile);
 
 /**
+ * Convert precipitation rate (mm/h) to dBZ using Marshall-Palmer Z-R relationship.
+ * Z = 200 * R^1.6  →  dBZ = 10 * log10(Z) = 10 * log10(200 * R^1.6)
+ */
+function precipRateToDbz(rMmh: number): number {
+  if (rMmh <= 0) return -999; // NoData
+  const z = 200 * Math.pow(rMmh, 1.6);
+  return 10 * Math.log10(z);
+}
+
+/**
  * DWD-specific normalization.
- * The HDF5 is UInt32 with NoData=4294967295, undetect=0.
- * We reproject from polar stereographic (auto-detected) to EPSG:3857,
- * then convert to byte with proper NoData handling.
+ * 1. Reproject HDF5 (polar stereographic) → EPSG:3857 as Float32
+ * 2. Read reprojected raster, convert mm/h → dBZ → byte pixel value
+ * 3. Write single-channel grayscale PNG matching our dBZ tile format
  */
 async function normalizeDwd(inputPath: string, outputPath: string): Promise<void> {
   await mkdir(path.dirname(outputPath), { recursive: true });
   const reprojected = outputPath.replace('.tif', '_reproj.tif');
 
-  // Step 1: Reproject, treating both 4294967295 (nodata) and 0 (undetect) as nodata
-  // GDAL auto-detects the polar stereographic CRS from HDF5 metadata
+  // Step 1: Reproject to EPSG:3857, keep as Float32 for accurate mm/h values
+  // GDAL auto-detects polar stereographic from HDF5 metadata and applies gain/offset
   await execFileAsync('gdalwarp', [
     '-t_srs', 'EPSG:3857',
     '-r', 'bilinear',
     '-srcnodata', '4294967295',
-    '-dstnodata', '0',
+    '-dstnodata', '-999',
+    '-ot', 'Float32',
     '-of', 'GTiff',
     '-overwrite',
     inputPath,
     reprojected,
   ]);
 
-  // Step 2: Scale to byte. DWD rv values after gain/offset are precipitation rate (mm/h).
-  // Map 0-50 mm/h to pixel values 1-255 (similar to dBZ range).
-  // The raw UInt32 values: 0=undetect, actual precip values scaled by gain (0.001).
-  // After gdalwarp with -dstnodata 0, nodata areas are 0.
-  // Non-zero values represent precipitation intensity.
+  // Step 2: Read the Float32 reprojected raster via sharp
+  const { data: rawBuf, info } = await sharp(reprojected)
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  const width = info.width;
+  const height = info.height;
+
+  // The raw buffer contains Float32 values (4 bytes per pixel, may be multi-channel)
+  // Sharp might read as 3 channels — we need to handle that
+  const channels = info.channels;
+  const pixelCount = width * height;
+
+  // Read as Float32Array (first channel only if multi-channel)
+  const floatView = new Float32Array(rawBuf.buffer, rawBuf.byteOffset, rawBuf.byteLength / 4);
+
+  // Step 3: Convert mm/h → dBZ → byte pixel value
+  const byteData = new Uint8Array(pixelCount);
+
+  for (let i = 0; i < pixelCount; i++) {
+    const mmh = floatView[i * channels]; // First channel
+    if (mmh <= 0 || mmh === -999 || isNaN(mmh)) {
+      byteData[i] = 0; // NoData
+    } else {
+      const dbz = precipRateToDbz(mmh);
+      byteData[i] = dbzToPixel(dbz);
+    }
+  }
+
+  // Step 4: Write as single-channel byte GeoTIFF via gdal_translate from a raw file
+  // Write the byte data as a raw grayscale PNG, then convert to GeoTIFF
+  const tempPng = outputPath.replace('.tif', '_temp.png');
+  await sharp(Buffer.from(byteData.buffer), {
+    raw: { width, height, channels: 1 },
+  })
+    .png({ compressionLevel: 2 })
+    .toFile(tempPng);
+
+  // Use gdal_translate to copy geo metadata from reprojected to the byte output
   await execFileAsync('gdal_translate', [
     '-ot', 'Byte',
-    '-scale', '0.01', '15', '1', '255',  // 0.01-15 mm/h (GDAL applies HDF5 gain) → byte 1-255
     '-a_nodata', '0',
     '-co', 'COMPRESS=LZW',
+    '-a_srs', 'EPSG:3857',
     reprojected,
     outputPath,
   ]);
 
+  // Overwrite with our properly converted byte data — keep the GeoTIFF envelope
+  // Actually simpler: write as GeoTIFF directly using the reprojected geo info
+  // We need the geo transform from the reprojected file
+  const { stdout: gdalInfoJson } = await execFileAsync('gdalinfo', ['-json', reprojected]);
+  const gdalInfo = JSON.parse(gdalInfoJson);
+  const gt = gdalInfo.geoTransform;
+
+  // Write final output as GeoTIFF with correct geo metadata
+  await execFileAsync('gdal_translate', [
+    '-of', 'GTiff',
+    '-a_srs', 'EPSG:3857',
+    '-a_nodata', '0',
+    '-co', 'COMPRESS=LZW',
+    '-a_ullr',
+    String(gt[0]), String(gt[3]),
+    String(gt[0] + gt[1] * width), String(gt[3] + gt[5] * height),
+    tempPng,
+    outputPath,
+  ]);
+
+  // Cleanup
   await unlink(reprojected).catch(() => {});
+  await unlink(tempPng).catch(() => {});
 }
 
 const SOURCE = SOURCES.dwd;
@@ -77,12 +147,11 @@ export class DwdIngester extends BaseIngester {
       return [];
     }
 
-    // Sort by timestamp, newest first
     const files = matches.map(m => ({
       filename: m[0],
       date: m[1],
       time: m[2],
-      timestamp: m[1] + m[2] + '00', // YYYYMMDDHHMMSS
+      timestamp: m[1] + m[2] + '00',
     }));
     files.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
 
@@ -124,16 +193,13 @@ export class DwdIngester extends BaseIngester {
         createWriteStream(tarPath),
       );
 
-      // 4. Extract the _000-hd5 file (current observation, not forecasts)
-      const extractPattern = `*_000-hd5`;
+      // 4. Extract the _000-hd5 file (current observation)
       try {
-        await execFileAsync('tar', ['xf', tarPath, '--wildcards', extractPattern], { cwd: rawDir });
+        await execFileAsync('tar', ['xf', tarPath, '--wildcards', '*_000-hd5'], { cwd: rawDir });
       } catch {
-        // Some tar versions don't support --wildcards, try without
         await execFileAsync('tar', ['xf', tarPath], { cwd: rawDir });
       }
 
-      // Find the extracted HDF5 file
       const rawFiles = await readdir(rawDir);
       const hd5File = rawFiles.find(f => f.includes(file.date) && f.includes(file.time) && f.endsWith('_000-hd5'));
 
@@ -145,23 +211,16 @@ export class DwdIngester extends BaseIngester {
 
       const hd5Path = path.join(rawDir, hd5File);
 
-      // 5. Normalize: reproject polar stereographic → EPSG:3857
+      // 5. Normalize: reproject + convert mm/h → dBZ → byte
       const normalizedPath = path.join(
         config.dataDir, 'normalized', 'dwd', `${file.timestamp}.tif`,
       );
 
       this.logger.info({ timestamp: file.timestamp }, 'Normalizing DWD data');
-      // DWD-specific normalization:
-      // - UInt32 with NoData=4294967295, undetect=0
-      // - HDF5 gain/offset converts to physical value (mm/h precipitation rate)
-      // - Need to reproject from polar stereographic (auto-detected) to EPSG:3857
-      // - Convert to byte dBZ-like scale for our pipeline
       await normalizeDwd(hd5Path, normalizedPath);
 
       // 6. Cleanup raw files
       await unlink(tarPath).catch(() => {});
-      await unlink(hd5Path).catch(() => {});
-      // Clean other extracted forecast files
       for (const f of rawFiles) {
         if (f.includes(file.date) && f.endsWith('-hd5')) {
           await unlink(path.join(rawDir, f)).catch(() => {});
