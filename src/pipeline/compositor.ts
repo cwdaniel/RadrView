@@ -10,7 +10,10 @@ import type { TileResult } from '../types.js';
 
 const logger = createLogger('compositor');
 const QUEUE_KEY = 'queue:composite';
-const SOURCE_NAMES = Object.values(SOURCES).map(s => s.name);
+
+// Separate dBZ sources from type sources — they composite independently
+const DBZ_SOURCE_NAMES = Object.values(SOURCES).map(s => s.name).filter(n => !n.endsWith('-type'));
+const TYPE_SOURCE_NAMES = Object.values(SOURCES).map(s => s.name).filter(n => n.endsWith('-type'));
 
 interface SourceFrame {
   name: string;
@@ -47,12 +50,17 @@ async function compositeFrame(redis: Redis, message: string): Promise<void> {
   const trigger: TileResult = JSON.parse(message);
   const { timestamp, epochMs } = trigger;
 
-  logger.info({ timestamp, source: trigger.source }, 'Compositing frame');
+  // Determine if this is a type composite or dBZ composite
+  const isType = trigger.source.endsWith('-type');
+  const sourceGroup = isType ? TYPE_SOURCE_NAMES : DBZ_SOURCE_NAMES;
+  const compositeName = isType ? 'composite-type' : 'composite';
+
+  logger.info({ timestamp, source: trigger.source, compositeName }, 'Compositing frame');
   const start = Date.now();
 
-  // 1. Get latest frame from each source
+  // 1. Get latest frame from each source in this group
   const sourceFrames: SourceFrame[] = [];
-  for (const name of SOURCE_NAMES) {
+  for (const name of sourceGroup) {
     const latest = await redis.get(`latest:${name}`);
     if (latest) {
       sourceFrames.push({
@@ -87,7 +95,7 @@ async function compositeFrame(redis: Redis, message: string): Promise<void> {
 
   logger.info({ totalUniqueTiles: allTileKeys.size, sources: sourceFrames.length }, 'Merging tiles');
 
-  const outputBaseDir = path.join(config.dataDir, 'tiles', 'composite', timestamp);
+  const outputBaseDir = path.join(config.dataDir, 'tiles', compositeName, timestamp);
   let totalTileCount = 0;
 
   // 4. Process each tile — only tiles that actually exist in at least one source
@@ -150,22 +158,25 @@ async function compositeFrame(redis: Redis, message: string): Promise<void> {
   const durationMs = Date.now() - start;
   logger.info({ timestamp, totalTileCount, durationMs }, 'Composite complete');
 
-  await redis.zadd('frames:composite', epochMs, timestamp);
-  await redis.hset(`frame:composite:${timestamp}`, {
-    source: 'composite',
+  await redis.zadd(`frames:${compositeName}`, epochMs, timestamp);
+  await redis.hset(`frame:${compositeName}:${timestamp}`, {
+    source: compositeName,
     epochMs: String(epochMs),
     tileCount: String(totalTileCount),
     zoomMin: String(config.zoomMin),
     zoomMax: String(config.zoomMax),
   });
-  await redis.set('latest:composite', timestamp);
+  await redis.set(`latest:${compositeName}`, timestamp);
 
-  await redis.publish('new-frame', JSON.stringify({
-    type: 'new-frame',
-    timestamp,
-    epochMs,
-    source: 'composite',
-  }));
+  // Only publish new-frame for dBZ composite (drives the viewer)
+  if (!isType) {
+    await redis.publish('new-frame', JSON.stringify({
+      type: 'new-frame',
+      timestamp,
+      epochMs,
+      source: compositeName,
+    }));
+  }
 }
 
 async function main(): Promise<void> {
@@ -180,7 +191,7 @@ async function main(): Promise<void> {
   process.on('SIGTERM', shutdown);
   process.on('SIGINT', shutdown);
 
-  logger.info({ sources: SOURCE_NAMES }, 'Compositor worker started');
+  logger.info({ dbzSources: DBZ_SOURCE_NAMES, typeSources: TYPE_SOURCE_NAMES }, 'Compositor worker started');
 
   while (running) {
     const result = await redis.blpop(QUEUE_KEY, 5);
