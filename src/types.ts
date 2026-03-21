@@ -41,6 +41,7 @@ export interface SourceConfig {
   priority: number;
   pollIntervalMs: number;
   product: string;
+  region: 'na' | 'eu';
 }
 
 export interface TileResult {

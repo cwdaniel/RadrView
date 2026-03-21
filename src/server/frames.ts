@@ -7,8 +7,10 @@ export function createFramesRouter(redis: Redis): Router {
 
   router.get('/sources', (_req, res) => {
     const sources = [
-      { name: 'composite', description: 'All sources merged' },
-      ...Object.values(SOURCES).map(s => ({ name: s.name, description: s.product })),
+      { name: 'composite', description: 'Global (all sources)' },
+      { name: 'composite-na', description: 'North America' },
+      { name: 'composite-eu', description: 'Europe' },
+      ...Object.values(SOURCES).filter(s => !s.name.endsWith('-type')).map(s => ({ name: s.name, description: s.product })),
     ];
     res.json({ sources });
   });

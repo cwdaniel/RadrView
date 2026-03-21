@@ -2,7 +2,7 @@ import type { SourceConfig } from '../types.js';
 
 export interface MrmsRegion {
   name: string;
-  s3Prefix: string;  // e.g. "CONUS", "ALASKA", "HAWAII"
+  s3Prefix: string;
   product: string;
   bounds: { west: number; south: number; east: number; north: number };
 }
@@ -29,12 +29,14 @@ export const MRMS_REGIONS: Record<string, MrmsRegion> = {
 };
 
 export const SOURCES: Record<string, SourceConfig> = {
+  // North America — dBZ
   mrms: {
     name: 'mrms',
     bounds: { west: -130, south: 20, east: -60, north: 55 },
     priority: 10,
     pollIntervalMs: 30_000,
     product: 'SeamlessHSR_00.00',
+    region: 'na',
   },
   'mrms-alaska': {
     name: 'mrms-alaska',
@@ -42,6 +44,7 @@ export const SOURCES: Record<string, SourceConfig> = {
     priority: 10,
     pollIntervalMs: 30_000,
     product: 'SeamlessHSR_00.00',
+    region: 'na',
   },
   'mrms-hawaii': {
     name: 'mrms-hawaii',
@@ -49,6 +52,7 @@ export const SOURCES: Record<string, SourceConfig> = {
     priority: 10,
     pollIntervalMs: 30_000,
     product: 'MergedBaseReflectivity_00.50',
+    region: 'na',
   },
   ec: {
     name: 'ec',
@@ -56,13 +60,27 @@ export const SOURCES: Record<string, SourceConfig> = {
     priority: 1,
     pollIntervalMs: 60_000,
     product: 'RADAR_1KM_RRAI',
+    region: 'na',
   },
+
+  // Europe — dBZ
+  dwd: {
+    name: 'dwd',
+    bounds: { west: 2, south: 46, east: 17, north: 56 },
+    priority: 10,
+    pollIntervalMs: 60_000,
+    product: 'rv',
+    region: 'eu',
+  },
+
+  // North America — type
   'mrms-type': {
     name: 'mrms-type',
     bounds: { west: -130, south: 20, east: -60, north: 55 },
     priority: 10,
     pollIntervalMs: 30_000,
     product: 'PrecipFlag_00.00',
+    region: 'na',
   },
   'mrms-alaska-type': {
     name: 'mrms-alaska-type',
@@ -70,6 +88,7 @@ export const SOURCES: Record<string, SourceConfig> = {
     priority: 10,
     pollIntervalMs: 30_000,
     product: 'PrecipFlag_00.00',
+    region: 'na',
   },
   'mrms-hawaii-type': {
     name: 'mrms-hawaii-type',
@@ -77,6 +96,7 @@ export const SOURCES: Record<string, SourceConfig> = {
     priority: 10,
     pollIntervalMs: 30_000,
     product: 'PrecipFlag_00.00',
+    region: 'na',
   },
   'ec-type': {
     name: 'ec-type',
@@ -84,5 +104,6 @@ export const SOURCES: Record<string, SourceConfig> = {
     priority: 1,
     pollIntervalMs: 60_000,
     product: 'PrecipFlag',
+    region: 'na',
   },
 };

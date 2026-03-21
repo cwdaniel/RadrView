@@ -165,6 +165,22 @@ services:
     depends_on:
       - redis
 
+  ingest-dwd:
+    container_name: radrview-ingest-dwd
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: ["node", "dist/ingest/dwd.js"]
+    volumes:
+      - ../data:/data
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - DATA_DIR=/data
+      - LOG_LEVEL=info
+    restart: unless-stopped
+    depends_on:
+      - redis
+
   cleanup:
     container_name: radrview-cleanup
     build:

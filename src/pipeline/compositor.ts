@@ -11,9 +11,28 @@ import type { TileResult } from '../types.js';
 const logger = createLogger('compositor');
 const QUEUE_KEY = 'queue:composite';
 
-// Separate dBZ sources from type sources — they composite independently
-const DBZ_SOURCE_NAMES = Object.values(SOURCES).map(s => s.name).filter(n => !n.endsWith('-type'));
-const TYPE_SOURCE_NAMES = Object.values(SOURCES).map(s => s.name).filter(n => n.endsWith('-type'));
+// Group sources by region and type for multi-composite output
+const ALL_SOURCES = Object.values(SOURCES);
+const DBZ_SOURCES = ALL_SOURCES.filter(s => !s.name.endsWith('-type'));
+const TYPE_SOURCES = ALL_SOURCES.filter(s => s.name.endsWith('-type'));
+
+// Composites to produce per trigger:
+// - composite (global dBZ), composite-na, composite-eu
+// - composite-type (global type), composite-na-type, composite-eu-type
+interface CompositeTarget {
+  name: string;
+  sourceNames: string[];
+}
+
+function getTargets(isType: boolean): CompositeTarget[] {
+  const pool = isType ? TYPE_SOURCES : DBZ_SOURCES;
+  const suffix = isType ? '-type' : '';
+  return [
+    { name: `composite${suffix}`, sourceNames: pool.map(s => s.name) },
+    { name: `composite-na${suffix}`, sourceNames: pool.filter(s => s.region === 'na').map(s => s.name) },
+    { name: `composite-eu${suffix}`, sourceNames: pool.filter(s => s.region === 'eu').map(s => s.name) },
+  ].filter(t => t.sourceNames.length > 0);
+}
 
 interface SourceFrame {
   name: string;
@@ -49,21 +68,18 @@ async function scanTiles(baseDir: string): Promise<Set<string>> {
 async function compositeFrame(redis: Redis, message: string): Promise<void> {
   const trigger: TileResult = JSON.parse(message);
   const { timestamp, epochMs } = trigger;
-
-  // Determine if this is a type composite or dBZ composite
   const isType = trigger.source.endsWith('-type');
-  const sourceGroup = isType ? TYPE_SOURCE_NAMES : DBZ_SOURCE_NAMES;
-  const compositeName = isType ? 'composite-type' : 'composite';
+  const targets = getTargets(isType);
 
-  logger.info({ timestamp, source: trigger.source, compositeName }, 'Compositing frame');
-  const start = Date.now();
+  logger.info({ timestamp, source: trigger.source, targets: targets.map(t => t.name) }, 'Compositing frame');
 
-  // 1. Get latest frame from each source in this group
-  const sourceFrames: SourceFrame[] = [];
-  for (const name of sourceGroup) {
+  // Collect latest frame for ALL sources in this pool (dBZ or type)
+  const allSourceNames = isType ? TYPE_SOURCES.map(s => s.name) : DBZ_SOURCES.map(s => s.name);
+  const allFrames = new Map<string, SourceFrame>();
+  for (const name of allSourceNames) {
     const latest = await redis.get(`latest:${name}`);
     if (latest) {
-      sourceFrames.push({
+      allFrames.set(name, {
         name,
         timestamp: latest,
         priority: SOURCES[name]?.priority ?? Object.values(SOURCES).find(s => s.name === name)?.priority ?? 0,
@@ -71,110 +87,105 @@ async function compositeFrame(redis: Redis, message: string): Promise<void> {
     }
   }
 
-  if (sourceFrames.length === 0) {
-    logger.warn('No source data available');
-    return;
-  }
-
-  // 2. Scan each source's tile directory to find existing tiles (fast — no per-tile stat)
+  // Scan tiles once per source (shared across targets)
   const sourceTileSets = new Map<string, Set<string>>();
-  for (const frame of sourceFrames) {
-    const tileDir = path.join(config.dataDir, 'tiles', frame.name, frame.timestamp);
+  for (const [name, frame] of allFrames) {
+    const tileDir = path.join(config.dataDir, 'tiles', name, frame.timestamp);
     const tiles = await scanTiles(tileDir);
-    sourceTileSets.set(frame.name, tiles);
-    logger.debug({ source: frame.name, tiles: tiles.size }, 'Scanned source tiles');
+    sourceTileSets.set(name, tiles);
   }
 
-  // 3. Build union of all tile keys
-  const allTileKeys = new Set<string>();
-  for (const tiles of sourceTileSets.values()) {
-    for (const key of tiles) {
-      allTileKeys.add(key);
+  // Produce each composite target
+  for (const target of targets) {
+    const start = Date.now();
+    const sourceFrames = target.sourceNames.map(n => allFrames.get(n)).filter((f): f is SourceFrame => !!f);
+    if (sourceFrames.length === 0) continue;
+
+    // Build union of tile keys for THIS target's sources only
+    const targetTileKeys = new Set<string>();
+    for (const frame of sourceFrames) {
+      const tiles = sourceTileSets.get(frame.name);
+      if (tiles) for (const key of tiles) targetTileKeys.add(key);
     }
-  }
 
-  logger.info({ totalUniqueTiles: allTileKeys.size, sources: sourceFrames.length }, 'Merging tiles');
+    if (targetTileKeys.size === 0) continue;
 
-  const outputBaseDir = path.join(config.dataDir, 'tiles', compositeName, timestamp);
-  let totalTileCount = 0;
+    const compositeName = target.name;
+    const outputBaseDir = path.join(config.dataDir, 'tiles', compositeName, timestamp);
+    let totalTileCount = 0;
 
-  // 4. Process each tile — only tiles that actually exist in at least one source
-  const BATCH = 100;
-  const keys = Array.from(allTileKeys);
+    const BATCH = 100;
+    const keys = Array.from(targetTileKeys);
 
-  for (let i = 0; i < keys.length; i += BATCH) {
-    const batch = keys.slice(i, i + BATCH);
-    await Promise.all(batch.map(async (key) => {
-      const [z, x, y] = key.split('/');
+    for (let i = 0; i < keys.length; i += BATCH) {
+      const batch = keys.slice(i, i + BATCH);
+      await Promise.all(batch.map(async (key) => {
+        const [z, x, y] = key.split('/');
 
-      // Find which sources have this tile
-      const available: Array<{ frame: SourceFrame; tilePath: string }> = [];
-      for (const frame of sourceFrames) {
-        if (sourceTileSets.get(frame.name)?.has(key)) {
-          available.push({
-            frame,
-            tilePath: path.join(config.dataDir, 'tiles', frame.name, frame.timestamp, z, x, `${y}.png`),
-          });
-        }
-      }
-
-      if (available.length === 0) return;
-
-      const outPath = path.join(outputBaseDir, z, x, `${y}.png`);
-      await mkdir(path.dirname(outPath), { recursive: true });
-
-      if (available.length === 1) {
-        await copyFile(available[0].tilePath, outPath);
-      } else {
-        // Multiple sources — highest priority non-zero pixel wins
-        available.sort((a, b) => a.frame.priority - b.frame.priority);
-
-        const buffers = await Promise.all(
-          available.map(async a => ({
-            data: await sharp(a.tilePath).grayscale().raw().toBuffer(),
-            frame: a.frame,
-          })),
-        );
-
-        const output = new Uint8Array(256 * 256);
-        for (const buf of buffers) {
-          const pixels = new Uint8Array(buf.data.buffer, buf.data.byteOffset, buf.data.byteLength);
-          for (let p = 0; p < 256 * 256 && p < pixels.length; p++) {
-            if (pixels[p] > 0) output[p] = pixels[p];
+        const available: Array<{ frame: SourceFrame; tilePath: string }> = [];
+        for (const frame of sourceFrames) {
+          if (sourceTileSets.get(frame.name)?.has(key)) {
+            available.push({
+              frame,
+              tilePath: path.join(config.dataDir, 'tiles', frame.name, frame.timestamp, z, x, `${y}.png`),
+            });
           }
         }
 
-        await sharp(Buffer.from(output.buffer), {
-          raw: { width: 256, height: 256, channels: 1 },
-        })
-          .png({ compressionLevel: 2 })
-          .toFile(outPath);
-      }
+        if (available.length === 0) return;
 
-      totalTileCount++;
-    }));
+        const outPath = path.join(outputBaseDir, z, x, `${y}.png`);
+        await mkdir(path.dirname(outPath), { recursive: true });
+
+        if (available.length === 1) {
+          await copyFile(available[0].tilePath, outPath);
+        } else {
+          available.sort((a, b) => a.frame.priority - b.frame.priority);
+          const buffers = await Promise.all(
+            available.map(async a => ({
+              data: await sharp(a.tilePath).grayscale().raw().toBuffer(),
+              frame: a.frame,
+            })),
+          );
+          const output = new Uint8Array(256 * 256);
+          for (const buf of buffers) {
+            const pixels = new Uint8Array(buf.data.buffer, buf.data.byteOffset, buf.data.byteLength);
+            for (let p = 0; p < 256 * 256 && p < pixels.length; p++) {
+              if (pixels[p] > 0) output[p] = pixels[p];
+            }
+          }
+          await sharp(Buffer.from(output.buffer), {
+            raw: { width: 256, height: 256, channels: 1 },
+          })
+            .png({ compressionLevel: 2 })
+            .toFile(outPath);
+        }
+
+        totalTileCount++;
+      }));
+    }
+
+    const durationMs = Date.now() - start;
+    logger.info({ compositeName, timestamp, totalTileCount, durationMs }, 'Composite complete');
+
+    await redis.zadd(`frames:${compositeName}`, epochMs, timestamp);
+    await redis.hset(`frame:${compositeName}:${timestamp}`, {
+      source: compositeName,
+      epochMs: String(epochMs),
+      tileCount: String(totalTileCount),
+      zoomMin: String(config.zoomMin),
+      zoomMax: String(config.zoomMax),
+    });
+    await redis.set(`latest:${compositeName}`, timestamp);
   }
 
-  const durationMs = Date.now() - start;
-  logger.info({ timestamp, totalTileCount, durationMs }, 'Composite complete');
-
-  await redis.zadd(`frames:${compositeName}`, epochMs, timestamp);
-  await redis.hset(`frame:${compositeName}:${timestamp}`, {
-    source: compositeName,
-    epochMs: String(epochMs),
-    tileCount: String(totalTileCount),
-    zoomMin: String(config.zoomMin),
-    zoomMax: String(config.zoomMax),
-  });
-  await redis.set(`latest:${compositeName}`, timestamp);
-
-  // Only publish new-frame for dBZ composite (drives the viewer)
+  // Publish new-frame for the main dBZ composite (drives the viewer)
   if (!isType) {
     await redis.publish('new-frame', JSON.stringify({
       type: 'new-frame',
       timestamp,
       epochMs,
-      source: compositeName,
+      source: 'composite',
     }));
   }
 }
@@ -191,7 +202,7 @@ async function main(): Promise<void> {
   process.on('SIGTERM', shutdown);
   process.on('SIGINT', shutdown);
 
-  logger.info({ dbzSources: DBZ_SOURCE_NAMES, typeSources: TYPE_SOURCE_NAMES }, 'Compositor worker started');
+  logger.info({ dbzSources: DBZ_SOURCES.map(s => s.name), typeSources: TYPE_SOURCES.map(s => s.name) }, 'Compositor worker started');
 
   while (running) {
     const result = await redis.blpop(QUEUE_KEY, 5);

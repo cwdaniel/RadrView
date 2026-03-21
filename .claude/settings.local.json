@@ -19,7 +19,16 @@
       "Bash(where upscale:*)",
       "Bash(MSYS_NO_PATHCONV=1 docker exec radrview-server sh -c \"/app/tools/realesrgan-ncnn-vulkan -i /app/tools/input.jpg -o /tmp/test_up.png -n realesrgan-x4plus -s 4 -g 0 2>&1\")",
       "Bash(MSYS_NO_PATHCONV=1 docker exec radrview-redis redis-cli GET latest:composite)",
-      "Bash(MSYS_NO_PATHCONV=1 docker exec radrview-upscaler sh -c \"find /data/tiles/mrms/20260320180200/12 -name '*.png' 2>/dev/null | wc -l || echo '0'\")"
+      "Bash(MSYS_NO_PATHCONV=1 docker exec radrview-upscaler sh -c \"find /data/tiles/mrms/20260320180200/12 -name '*.png' 2>/dev/null | wc -l || echo '0'\")",
+      "Bash(find F:/Projects/Personal/Github/RadrView/data/tiles/mrms/*/11 -name *.png)",
+      "Bash(find F:/Projects/Personal/Github/RadrView/data/tiles/mrms/*/12 -name *.png)",
+      "Bash(find F:/Projects/Personal/Github/RadrView/data/tiles/mrms/*/10 -name *.png)",
+      "Bash(docker stop:*)",
+      "Bash(docker rm:*)",
+      "Read(//f/tmp/**)",
+      "Bash(tar xf:*)",
+      "Bash(docker run:*)",
+      "Bash(MSYS_NO_PATHCONV=1 docker run --rm radrview-server sh -c \"cd /tmp && apt-get update -qq && apt-get install -y -qq curl > /dev/null 2>&1 && curl -s -o dwd.tar 'https://opendata.dwd.de/weather/radar/composite/rv/composite_rv_LATEST.tar' && tar xf dwd.tar && ls composite_rv_* | head -3 && gdalinfo composite_rv_*_000-hd5 2>&1 | head -25\")"
     ]
   }
 }

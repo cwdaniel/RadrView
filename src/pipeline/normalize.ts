@@ -10,11 +10,12 @@ const logger = createLogger('normalize');
 export interface NormalizeOptions {
   inputPath: string;
   outputPath: string;
-  skipScale?: boolean; // For PrecipFlag — don't apply dBZ scaling
+  skipScale?: boolean;  // For PrecipFlag — don't apply dBZ scaling
+  autoSrs?: boolean;    // Let GDAL detect source CRS (for non-EPSG:4326 like DWD polar stereo)
 }
 
 export async function normalizeGrib(opts: NormalizeOptions): Promise<void> {
-  const { inputPath, outputPath, skipScale } = opts;
+  const { inputPath, outputPath, skipScale, autoSrs } = opts;
   await mkdir(path.dirname(outputPath), { recursive: true });
 
   const reprojected = outputPath.replace('.tif', '_reproj.tif');
@@ -22,18 +23,21 @@ export async function normalizeGrib(opts: NormalizeOptions): Promise<void> {
   // Step 1: Reproject from EPSG:4326 to EPSG:3857, handling NoData
   // MRMS uses -999 as NoData. PrecipFlag uses 0 as NoData.
   const srcNodata = skipScale ? '0' : '-999';
-  logger.info({ inputPath, skipScale }, 'Reprojecting to EPSG:3857');
-  await execFileAsync('gdalwarp', [
-    '-s_srs', 'EPSG:4326',
+  const resample = skipScale ? 'near' : 'bilinear';
+  logger.info({ inputPath, skipScale, autoSrs }, 'Reprojecting to EPSG:3857');
+
+  const warpArgs = [
+    ...(autoSrs ? [] : ['-s_srs', 'EPSG:4326']),
     '-t_srs', 'EPSG:3857',
-    '-r', 'near',
+    '-r', resample,
     '-srcnodata', srcNodata,
     '-dstnodata', srcNodata,
     '-of', 'GTiff',
     '-overwrite',
     inputPath,
     reprojected,
-  ]);
+  ];
+  await execFileAsync('gdalwarp', warpArgs);
 
   if (skipScale) {
     // Step 2 (PrecipFlag): Convert to Byte preserving raw flag values (0-7)
