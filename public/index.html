@@ -191,23 +191,72 @@
       document.getElementById('legend').src = `${API}/palette/${palette}/legend`;
     }
 
+    let prevRadarLayer = null;
+    let fadeTimeout = null;
+    const FADE_MS = 300;
+
     function addRadarLayer() {
-      if (radarLayer) map.removeLayer(radarLayer);
       if (!currentFrame) return;
 
       const palette = document.getElementById('palette').value;
       const source = document.getElementById('source').value;
-      const opacity = document.getElementById('opacity').value / 100;
+      const targetOpacity = document.getElementById('opacity').value / 100;
 
-      radarLayer = L.tileLayer(`${API}/tile/${currentFrame}/{z}/{x}/{y}?palette=${palette}&source=${source}`, {
-        opacity,
+      const newLayer = L.tileLayer(`${API}/tile/${currentFrame}/{z}/{x}/{y}?palette=${palette}&source=${source}`, {
+        opacity: 0,
         maxNativeZoom: 12,
         maxZoom: 18,
         minZoom: 2,
         tileSize: 256,
         attribution: 'RadrView',
-        className: 'radar-layer',
-      }).addTo(map);
+      });
+
+      // Crossfade: add new layer at 0 opacity, fade in, fade out old, remove old
+      newLayer.addTo(map);
+
+      // Wait for tiles to load before starting fade
+      newLayer.once('load', () => {
+        crossfade(newLayer, targetOpacity);
+      });
+      // Fallback if load event doesn't fire (empty tiles)
+      setTimeout(() => crossfade(newLayer, targetOpacity), 500);
+    }
+
+    function crossfade(newLayer, targetOpacity) {
+      if (fadeTimeout) clearTimeout(fadeTimeout);
+
+      const oldLayer = radarLayer;
+      radarLayer = newLayer;
+
+      const steps = 10;
+      let step = 0;
+      const interval = FADE_MS / steps;
+
+      function tick() {
+        step++;
+        const t = step / steps;
+        // Ease in-out
+        const ease = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+
+        newLayer.setOpacity(ease * targetOpacity);
+        if (oldLayer && oldLayer !== newLayer) {
+          oldLayer.setOpacity((1 - ease) * targetOpacity);
+        }
+
+        if (step < steps) {
+          fadeTimeout = setTimeout(tick, interval);
+        } else {
+          // Cleanup old layer
+          if (oldLayer && oldLayer !== newLayer) {
+            map.removeLayer(oldLayer);
+          }
+          if (prevRadarLayer && prevRadarLayer !== newLayer && prevRadarLayer !== oldLayer) {
+            try { map.removeLayer(prevRadarLayer); } catch {}
+          }
+          prevRadarLayer = newLayer;
+        }
+      }
+      tick();
     }
 
     async function fetchLatestFrame() {
