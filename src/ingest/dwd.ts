@@ -11,12 +11,51 @@ import { Readable } from 'node:stream';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { BaseIngester } from './base.js';
-import { normalizeGrib } from '../pipeline/normalize.js';
 import { config } from '../config/env.js';
 import { SOURCES } from '../config/sources.js';
 import type { IngestResult } from '../types.js';
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * DWD-specific normalization.
+ * The HDF5 is UInt32 with NoData=4294967295, undetect=0.
+ * We reproject from polar stereographic (auto-detected) to EPSG:3857,
+ * then convert to byte with proper NoData handling.
+ */
+async function normalizeDwd(inputPath: string, outputPath: string): Promise<void> {
+  await mkdir(path.dirname(outputPath), { recursive: true });
+  const reprojected = outputPath.replace('.tif', '_reproj.tif');
+
+  // Step 1: Reproject, treating both 4294967295 (nodata) and 0 (undetect) as nodata
+  // GDAL auto-detects the polar stereographic CRS from HDF5 metadata
+  await execFileAsync('gdalwarp', [
+    '-t_srs', 'EPSG:3857',
+    '-r', 'bilinear',
+    '-srcnodata', '4294967295',
+    '-dstnodata', '0',
+    '-of', 'GTiff',
+    '-overwrite',
+    inputPath,
+    reprojected,
+  ]);
+
+  // Step 2: Scale to byte. DWD rv values after gain/offset are precipitation rate (mm/h).
+  // Map 0-50 mm/h to pixel values 1-255 (similar to dBZ range).
+  // The raw UInt32 values: 0=undetect, actual precip values scaled by gain (0.001).
+  // After gdalwarp with -dstnodata 0, nodata areas are 0.
+  // Non-zero values represent precipitation intensity.
+  await execFileAsync('gdal_translate', [
+    '-ot', 'Byte',
+    '-scale', '0', '50000', '1', '255',  // raw values 0-50000 → 0-50 mm/h → byte 1-255
+    '-a_nodata', '0',
+    '-co', 'COMPRESS=LZW',
+    reprojected,
+    outputPath,
+  ]);
+
+  await unlink(reprojected).catch(() => {});
+}
 
 const SOURCE = SOURCES.dwd;
 const DWD_BASE = 'https://opendata.dwd.de/weather/radar/composite/rv/';
@@ -112,11 +151,12 @@ export class DwdIngester extends BaseIngester {
       );
 
       this.logger.info({ timestamp: file.timestamp }, 'Normalizing DWD data');
-      await normalizeGrib({
-        inputPath: hd5Path,
-        outputPath: normalizedPath,
-        autoSrs: true, // DWD uses polar stereographic, let GDAL detect
-      });
+      // DWD-specific normalization:
+      // - UInt32 with NoData=4294967295, undetect=0
+      // - HDF5 gain/offset converts to physical value (mm/h precipitation rate)
+      // - Need to reproject from polar stereographic (auto-detected) to EPSG:3857
+      // - Convert to byte dBZ-like scale for our pipeline
+      await normalizeDwd(hd5Path, normalizedPath);
 
       // 6. Cleanup raw files
       await unlink(tarPath).catch(() => {});
