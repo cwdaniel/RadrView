@@ -2,44 +2,99 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>RadrView</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #1a1a2e; }
+    * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #1a1a2e; overflow: hidden; }
     #map { width: 100vw; height: 100vh; }
-    .controls {
+
+    /* Panel — desktop: top-right card, mobile: bottom sheet */
+    .panel {
       position: absolute;
-      top: 12px;
-      right: 12px;
       z-index: 1000;
-      background: rgba(26, 26, 46, 0.92);
-      border-radius: 10px;
-      padding: 14px 16px;
+      background: rgba(20, 20, 36, 0.95);
       color: #e0e0e0;
       font-size: 13px;
-      min-width: 200px;
-      backdrop-filter: blur(8px);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
       border: 1px solid rgba(255,255,255,0.08);
-      box-shadow: 0 4px 24px rgba(0,0,0,0.4);
+      box-shadow: 0 4px 30px rgba(0,0,0,0.5);
+      transition: transform 0.3s ease;
     }
-    .controls h3 {
-      margin: 0 0 10px 0;
+
+    /* Desktop layout */
+    @media (min-width: 641px) {
+      .panel {
+        top: 12px; right: 12px;
+        border-radius: 12px;
+        padding: 14px 16px;
+        min-width: 220px;
+        max-width: 260px;
+        max-height: calc(100vh - 24px);
+        overflow-y: auto;
+      }
+      .panel-handle { display: none; }
+      .panel.collapsed .panel-body { display: none; }
+    }
+
+    /* Mobile layout — bottom sheet */
+    @media (max-width: 640px) {
+      .panel {
+        bottom: 0; left: 0; right: 0;
+        border-radius: 16px 16px 0 0;
+        padding: 0 16px 16px;
+        max-height: 70vh;
+        overflow-y: auto;
+        transform: translateY(calc(100% - 90px));
+      }
+      .panel.open { transform: translateY(0); }
+      .panel-handle {
+        display: flex;
+        justify-content: center;
+        padding: 10px 0 6px;
+        cursor: pointer;
+      }
+      .panel-handle::after {
+        content: '';
+        width: 36px; height: 4px;
+        background: rgba(255,255,255,0.25);
+        border-radius: 2px;
+      }
+      .panel h3 { font-size: 14px; }
+      .panel select, .panel button { font-size: 14px; min-height: 36px; }
+    }
+
+    .panel h3 {
+      margin: 0 0 8px;
       font-size: 15px;
       font-weight: 600;
       color: #fff;
       letter-spacing: 0.5px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
     }
-    .controls label {
+    .panel h3 .live-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: #f44;
+      display: inline-block;
+    }
+    .panel h3 .live-dot.connected { background: #4f4; }
+
+    .panel label {
       display: block;
       margin: 8px 0 4px;
-      font-size: 11px;
+      font-size: 10px;
       text-transform: uppercase;
       letter-spacing: 0.8px;
-      color: #888;
+      color: #666;
     }
-    .controls select {
+    .panel select {
       width: 100%;
       padding: 6px 8px;
       border-radius: 6px;
@@ -48,22 +103,34 @@
       color: #e0e0e0;
       font-size: 13px;
       cursor: pointer;
+      -webkit-appearance: none;
     }
-    .controls select:focus { outline: none; border-color: rgba(100, 200, 255, 0.4); }
-    .status {
-      margin-top: 12px;
-      padding-top: 10px;
-      border-top: 1px solid rgba(255,255,255,0.08);
-      font-size: 11px;
-      color: #888;
-      line-height: 1.6;
+    .panel select:focus { outline: none; border-color: rgba(100, 200, 255, 0.4); }
+
+    .row { display: flex; gap: 8px; align-items: center; }
+    .row > * { flex: 1; }
+
+    .status-bar {
+      display: flex;
+      justify-content: space-between;
+      font-size: 10px;
+      color: #666;
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid rgba(255,255,255,0.06);
     }
-    .status .value { color: #aee; }
+    .status-bar .val { color: #9cf; }
+
+    .legend-row {
+      display: flex;
+      gap: 6px;
+      align-items: stretch;
+      margin-top: 8px;
+    }
     .legend-img {
-      margin-top: 10px;
       display: block;
-      height: 180px;
-      width: 24px;
+      height: 120px;
+      width: 20px;
       border-radius: 4px;
       border: 1px solid rgba(255,255,255,0.1);
     }
@@ -71,74 +138,96 @@
       display: flex;
       flex-direction: column;
       justify-content: space-between;
-      height: 180px;
-      font-size: 10px;
-      color: #888;
-      padding: 2px 0;
+      height: 120px;
+      font-size: 9px;
+      color: #666;
     }
-    .legend-row {
+
+    .playback { margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.06); }
+    .playback-controls { display: flex; align-items: center; gap: 6px; }
+    .playback-controls button {
+      background: rgba(255,255,255,0.1);
+      border: 1px solid rgba(255,255,255,0.15);
+      color: #fff;
+      border-radius: 6px;
+      width: 36px; height: 32px;
+      cursor: pointer;
+      font-size: 14px;
+      flex-shrink: 0;
+    }
+    .playback-controls button:active { background: rgba(255,255,255,0.25); }
+    .playback-controls input[type=range] { flex: 1; min-width: 0; }
+    .playback-meta {
       display: flex;
-      gap: 6px;
-      align-items: stretch;
-      margin-top: 8px;
+      justify-content: space-between;
+      font-size: 9px;
+      color: #555;
+      margin-top: 2px;
     }
-    .playback { margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.08); }
-    .playback label { display: block; margin-bottom: 6px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px; color: #888; }
-    .playback-controls { display: flex; align-items: center; gap: 8px; }
-    .playback-controls button { background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.15); color: #fff; border-radius: 6px; width: 32px; height: 28px; cursor: pointer; font-size: 12px; }
-    .playback-controls button:hover { background: rgba(255,255,255,0.2); }
-    .playback-controls input[type=range] { flex: 1; }
   </style>
 </head>
 <body>
   <div id="map"></div>
-  <div class="controls">
-    <h3>RadrView</h3>
 
-    <label>Palette</label>
-    <select id="palette"></select>
+  <div class="panel" id="panel">
+    <div class="panel-handle" id="panel-handle"></div>
 
-    <label>Source</label>
-    <select id="source">
-      <option value="composite" selected>Composite (All)</option>
-    </select>
+    <h3>
+      RadrView
+      <span class="live-dot" id="live-dot" title="disconnected"></span>
+    </h3>
 
-    <label>Opacity</label>
-    <input type="range" id="opacity" min="0" max="100" value="70" style="width:100%">
-
-    <div class="legend-row">
-      <img id="legend" class="legend-img" />
-      <div class="legend-labels">
-        <span>70+ dBZ</span>
-        <span>50</span>
-        <span>35</span>
-        <span>20</span>
-        <span>5</span>
+    <div class="panel-body">
+      <div class="row">
+        <div>
+          <label>Palette</label>
+          <select id="palette"></select>
+        </div>
+        <div>
+          <label>Source</label>
+          <select id="source">
+            <option value="composite" selected>Global</option>
+          </select>
+        </div>
       </div>
-    </div>
 
-    <div class="status">
-      <div>Live: <span class="value" id="ws-status" style="color:#f44">disconnected</span></div>
-      <div>Frame: <span class="value" id="frame-ts">--</span></div>
-      <div>Age: <span class="value" id="frame-age">--</span></div>
-      <div>Tiles: <span class="value" id="tile-count">--</span></div>
-    </div>
+      <label>Opacity</label>
+      <input type="range" id="opacity" min="0" max="100" value="70" style="width:100%">
 
-    <div class="playback">
-      <label>Animation</label>
-      <div class="playback-controls">
-        <button id="play-btn" title="Play/Pause">&#9654;</button>
-        <input type="range" id="timeline" min="0" max="0" value="0" style="flex:1">
-        <span id="frame-time" style="font-size:11px;color:#aee;min-width:50px">--:--</span>
+      <div class="legend-row">
+        <img id="legend" class="legend-img" />
+        <div class="legend-labels">
+          <span>70+</span>
+          <span>50</span>
+          <span>35</span>
+          <span>20</span>
+          <span>5 dBZ</span>
+        </div>
       </div>
-      <div style="display:flex;justify-content:space-between;font-size:10px;color:#666;margin-top:2px">
-        <span id="timeline-start">--</span>
-        <span>Speed: <select id="play-speed" style="background:rgba(255,255,255,0.06);color:#e0e0e0;border:1px solid rgba(255,255,255,0.12);border-radius:4px;font-size:10px">
-          <option value="500">Fast</option>
-          <option value="1000" selected>Normal</option>
-          <option value="2000">Slow</option>
-        </select></span>
-        <span id="timeline-end">--</span>
+
+      <div class="status-bar">
+        <span>Frame: <span class="val" id="frame-ts">--</span></span>
+        <span>Age: <span class="val" id="frame-age">--</span></span>
+        <span><span class="val" id="tile-count">--</span></span>
+      </div>
+
+      <div class="playback">
+        <div class="playback-controls">
+          <button id="play-btn" title="Play/Pause">&#9654;</button>
+          <input type="range" id="timeline" min="0" max="0" value="0">
+          <span style="font-size:11px;color:#9cf;min-width:40px;text-align:right" id="frame-time">--:--</span>
+        </div>
+        <div class="playback-meta">
+          <span id="timeline-start">--</span>
+          <span>
+            <select id="play-speed" style="background:rgba(255,255,255,0.06);color:#ccc;border:1px solid rgba(255,255,255,0.1);border-radius:4px;font-size:9px;padding:1px 4px">
+              <option value="500">Fast</option>
+              <option value="1000" selected>Normal</option>
+              <option value="2000">Slow</option>
+            </select>
+          </span>
+          <span id="timeline-end">--</span>
+        </div>
       </div>
     </div>
   </div>
@@ -153,6 +242,12 @@
     let playInterval = null;
     let liveMode = true;
 
+    // Mobile panel toggle
+    const panel = document.getElementById('panel');
+    document.getElementById('panel-handle').addEventListener('click', () => {
+      panel.classList.toggle('open');
+    });
+
     function formatAge(seconds) {
       if (seconds < 60) return seconds + 's';
       if (seconds < 3600) return Math.floor(seconds / 60) + 'm ' + (seconds % 60) + 's';
@@ -160,18 +255,15 @@
       return Math.floor(seconds / 86400) + 'd ' + Math.floor((seconds % 86400) / 3600) + 'h';
     }
 
-    // Init map centered on North America
     const map = L.map('map', { zoomControl: false }).setView([42, -95], 5);
     L.control.zoom({ position: 'bottomleft' }).addTo(map);
 
-    // Dark basemap
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-      attribution: '&copy; OpenStreetMap &copy; CARTO',
+      attribution: '&copy; OSM &copy; CARTO',
       subdomains: 'abcd',
       maxZoom: 19,
     }).addTo(map);
 
-    // Load palettes
     async function loadPalettes() {
       const res = await fetch(`${API}/palettes`);
       const data = await res.json();
@@ -179,7 +271,7 @@
       data.palettes.forEach(p => {
         const opt = document.createElement('option');
         opt.value = p.name;
-        opt.textContent = p.name.charAt(0).toUpperCase() + p.name.slice(1) + ' — ' + p.description;
+        opt.textContent = p.name.charAt(0).toUpperCase() + p.name.slice(1);
         if (p.name === 'dark') opt.selected = true;
         sel.appendChild(opt);
       });
@@ -187,16 +279,15 @@
     }
 
     function updateLegend() {
-      const palette = document.getElementById('palette').value;
-      document.getElementById('legend').src = `${API}/palette/${palette}/legend`;
+      document.getElementById('legend').src = `${API}/palette/${document.getElementById('palette').value}/legend`;
     }
 
-    // Dual-layer crossfade system with preloading
+    // Dual-layer preload + crossfade
     let frontLayer = null;
     let backLayer = null;
     let preloadedFrame = null;
     let fadeAnim = null;
-    const FADE_DURATION = 400; // ms
+    const FADE_DURATION = 400;
 
     function makeLayer(timestamp) {
       const palette = document.getElementById('palette').value;
@@ -215,10 +306,8 @@
       if (!currentFrame) return;
       const targetOpacity = document.getElementById('opacity').value / 100;
 
-      // Cancel any in-progress fade
       if (fadeAnim) { cancelAnimationFrame(fadeAnim); fadeAnim = null; }
 
-      // If we preloaded this frame, crossfade from front → back
       if (backLayer && preloadedFrame === currentFrame) {
         const oldFront = frontLayer;
         const newFront = backLayer;
@@ -227,20 +316,15 @@
         frontLayer = newFront;
         radarLayer = newFront;
 
-        // Smooth crossfade using requestAnimationFrame
         const startTime = performance.now();
         function animate(now) {
           const t = Math.min((now - startTime) / FADE_DURATION, 1);
-          // Ease in-out cubic
-          const ease = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
-
+          const ease = t < 0.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2, 3)/2;
           newFront.setOpacity(ease * targetOpacity);
           if (oldFront) oldFront.setOpacity((1 - ease) * targetOpacity);
-
           if (t < 1) {
             fadeAnim = requestAnimationFrame(animate);
           } else {
-            // Fade complete — remove old layer
             if (oldFront) map.removeLayer(oldFront);
             fadeAnim = null;
           }
@@ -249,7 +333,6 @@
         return;
       }
 
-      // No preload — hard swap (first frame or palette/source change)
       const newLayer = makeLayer(currentFrame);
       newLayer.setOpacity(targetOpacity);
       newLayer.addTo(map);
@@ -260,12 +343,9 @@
 
     function preloadFrame(timestamp) {
       if (!timestamp || timestamp === preloadedFrame) return;
-
-      // Remove old preload
       if (backLayer) { map.removeLayer(backLayer); backLayer = null; }
-
       backLayer = makeLayer(timestamp);
-      backLayer.addTo(map); // Added at opacity 0 — tiles load invisibly
+      backLayer.addTo(map);
       preloadedFrame = timestamp;
     }
 
@@ -277,141 +357,89 @@
         const data = await res.json();
         const changed = currentFrame !== data.timestamp;
         currentFrame = data.timestamp;
-        document.getElementById('frame-ts').textContent = data.timestamp;
+        document.getElementById('frame-ts').textContent = data.timestamp.slice(8,10)+':'+data.timestamp.slice(10,12);
         document.getElementById('frame-age').textContent = formatAge(data.age);
-        // Fetch frame count
         fetch(`${API}/frames?source=${source}&limit=1000`).then(r=>r.json()).then(d=>{
           document.getElementById('tile-count').textContent = d.count + ' frames';
         }).catch(()=>{});
         if (changed) addRadarLayer();
       } catch (e) {
-        document.getElementById('frame-ts').textContent = 'error';
+        document.getElementById('frame-ts').textContent = 'err';
       }
     }
 
-    // Event listeners
-    document.getElementById('palette').addEventListener('change', () => {
-      updateLegend();
-      addRadarLayer();
-    });
-    document.getElementById('source').addEventListener('change', () => {
-      stopPlayback();
-      liveMode = true;
-      fetchLatestFrame();
-      loadFrames();
-    });
+    document.getElementById('palette').addEventListener('change', () => { updateLegend(); addRadarLayer(); });
+    document.getElementById('source').addEventListener('change', () => { stopPlayback(); liveMode = true; fetchLatestFrame(); loadFrames(); });
     document.getElementById('opacity').addEventListener('input', () => {
       if (radarLayer) radarLayer.setOpacity(document.getElementById('opacity').value / 100);
     });
 
-    // WebSocket for real-time frame updates
-    const wsStatus = document.getElementById('ws-status');
+    // WebSocket
+    const liveDot = document.getElementById('live-dot');
     function connectWebSocket() {
-      const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const ws = new WebSocket(`${wsProtocol}//${window.location.host}/ws`);
-
-      ws.onopen = () => {
-        wsStatus.textContent = 'connected';
-        wsStatus.style.color = '#4f4';
-      };
-
+      const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const ws = new WebSocket(`${wsProto}//${location.host}/ws`);
+      ws.onopen = () => { liveDot.classList.add('connected'); liveDot.title = 'connected'; };
       ws.onmessage = (event) => {
         const msg = JSON.parse(event.data);
-        if (msg.type === 'new-frame') {
+        if (msg.type === 'new-frame' && liveMode) {
           currentFrame = msg.timestamp;
-          document.getElementById('frame-ts').textContent = msg.timestamp;
+          document.getElementById('frame-ts').textContent = msg.timestamp.slice(8,10)+':'+msg.timestamp.slice(10,12);
           document.getElementById('frame-age').textContent = formatAge(0);
-          // Flash the status to show a live update arrived
-          wsStatus.textContent = 'new frame!';
-          wsStatus.style.color = '#ff0';
-          setTimeout(() => {
-            wsStatus.textContent = 'connected';
-            wsStatus.style.color = '#4f4';
-          }, 2000);
           addRadarLayer();
-          if (liveMode) {
-            loadFrames(); // Refresh frame list
-          }
+          loadFrames();
         }
       };
-
-      ws.onclose = () => {
-        wsStatus.textContent = 'reconnecting...';
-        wsStatus.style.color = '#f44';
-        setTimeout(connectWebSocket, 5000);
-      };
-
+      ws.onclose = () => { liveDot.classList.remove('connected'); liveDot.title = 'disconnected'; setTimeout(connectWebSocket, 5000); };
       ws.onerror = () => ws.close();
     }
 
-    // Load sources dynamically
+    // Sources
     async function loadSources() {
       const res = await fetch(`${API}/sources`);
       const data = await res.json();
       const sel = document.getElementById('source');
       data.sources.forEach(s => {
-        if (s.name === 'composite') return; // already in HTML
+        if (s.name === 'composite') return;
         const opt = document.createElement('option');
         opt.value = s.name;
-        opt.textContent = s.name.toUpperCase() + ' — ' + s.description;
+        opt.textContent = s.description || s.name;
         sel.appendChild(opt);
       });
     }
 
-    // Animation / Time Machine
+    // Animation
     async function loadFrames() {
       const source = document.getElementById('source').value;
       const res = await fetch(`${API}/frames?source=${source}&limit=720`);
       const data = await res.json();
       frames = data.frames;
-      const timeline = document.getElementById('timeline');
-      timeline.max = Math.max(0, frames.length - 1);
-      timeline.value = frames.length - 1;
+      const tl = document.getElementById('timeline');
+      tl.max = Math.max(0, frames.length - 1);
+      tl.value = frames.length - 1;
       if (frames.length > 0) {
         document.getElementById('timeline-start').textContent = formatFrameTime(frames[0].timestamp);
         document.getElementById('timeline-end').textContent = formatFrameTime(frames[frames.length - 1].timestamp);
       }
     }
 
-    function formatFrameTime(ts) {
-      // YYYYMMDDHHMMSS -> HH:MM
-      return ts.slice(8, 10) + ':' + ts.slice(10, 12);
-    }
+    function formatFrameTime(ts) { return ts.slice(8,10) + ':' + ts.slice(10,12); }
 
-    document.getElementById('play-btn').addEventListener('click', () => {
-      if (playing) {
-        stopPlayback();
-      } else {
-        startPlayback();
-      }
-    });
-
-    document.getElementById('play-btn').addEventListener('dblclick', () => {
-      stopPlayback();
-      liveMode = true;
-      const timeline = document.getElementById('timeline');
-      timeline.value = frames.length - 1;
-      fetchLatestFrame();
-    });
+    document.getElementById('play-btn').addEventListener('click', () => { playing ? stopPlayback() : startPlayback(); });
+    document.getElementById('play-btn').addEventListener('dblclick', () => { stopPlayback(); liveMode = true; document.getElementById('timeline').value = frames.length - 1; fetchLatestFrame(); });
 
     function startPlayback() {
-      playing = true;
-      liveMode = false;
+      playing = true; liveMode = false;
       document.getElementById('play-btn').textContent = '\u23F8';
       const speed = parseInt(document.getElementById('play-speed').value);
-
-      // Preload the first next frame immediately
-      const timeline = document.getElementById('timeline');
-      const nextIdx = (parseInt(timeline.value) + 1) % frames.length;
+      const tl = document.getElementById('timeline');
+      const nextIdx = (parseInt(tl.value) + 1) % frames.length;
       if (frames[nextIdx]) preloadFrame(frames[nextIdx].timestamp);
-
       playInterval = setInterval(() => {
-        let idx = parseInt(timeline.value) + 1;
+        let idx = parseInt(tl.value) + 1;
         if (idx >= frames.length) idx = 0;
-        timeline.value = idx;
+        tl.value = idx;
         showFrame(idx);
-
-        // Preload the NEXT frame while this one is showing
         const peekIdx = (idx + 1) % frames.length;
         if (frames[peekIdx]) preloadFrame(frames[peekIdx].timestamp);
       }, speed);
@@ -423,20 +451,15 @@
       if (playInterval) { clearInterval(playInterval); playInterval = null; }
     }
 
-    document.getElementById('timeline').addEventListener('input', (e) => {
-      liveMode = false;
-      stopPlayback();
-      showFrame(parseInt(e.target.value));
-    });
+    document.getElementById('timeline').addEventListener('input', (e) => { liveMode = false; stopPlayback(); showFrame(parseInt(e.target.value)); });
 
     function showFrame(idx) {
       if (idx < 0 || idx >= frames.length) return;
       const frame = frames[idx];
       currentFrame = frame.timestamp;
-      document.getElementById('frame-ts').textContent = frame.timestamp;
+      document.getElementById('frame-ts').textContent = formatFrameTime(frame.timestamp);
       document.getElementById('frame-time').textContent = formatFrameTime(frame.timestamp);
-      const age = Math.floor((Date.now() - frame.epochMs) / 1000);
-      document.getElementById('frame-age').textContent = formatAge(age);
+      document.getElementById('frame-age').textContent = formatAge(Math.floor((Date.now() - frame.epochMs) / 1000));
       addRadarLayer();
     }
 
@@ -446,7 +469,6 @@
     fetchLatestFrame();
     loadFrames();
     connectWebSocket();
-    // Fallback polling in case WebSocket disconnects
     setInterval(fetchLatestFrame, 60000);
   </script>
 </body>
