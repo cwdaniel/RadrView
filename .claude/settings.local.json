@@ -28,7 +28,8 @@
       "Read(//f/tmp/**)",
       "Bash(tar xf:*)",
       "Bash(docker run:*)",
-      "Bash(MSYS_NO_PATHCONV=1 docker run --rm radrview-server sh -c \"cd /tmp && apt-get update -qq && apt-get install -y -qq curl > /dev/null 2>&1 && curl -s -o dwd.tar 'https://opendata.dwd.de/weather/radar/composite/rv/composite_rv_LATEST.tar' && tar xf dwd.tar && ls composite_rv_* | head -3 && gdalinfo composite_rv_*_000-hd5 2>&1 | head -25\")"
+      "Bash(MSYS_NO_PATHCONV=1 docker run --rm radrview-server sh -c \"cd /tmp && apt-get update -qq && apt-get install -y -qq curl > /dev/null 2>&1 && curl -s -o dwd.tar 'https://opendata.dwd.de/weather/radar/composite/rv/composite_rv_LATEST.tar' && tar xf dwd.tar && ls composite_rv_* | head -3 && gdalinfo composite_rv_*_000-hd5 2>&1 | head -25\")",
+      "Bash(MSYS_NO_PATHCONV=1 docker exec radrview-ingest-dwd sh -c \"cd /tmp && apt-get update -qq && apt-get install -y -qq curl > /dev/null 2>&1 && curl -s -o dwd.tar 'https://opendata.dwd.de/weather/radar/composite/rv/composite_rv_LATEST.tar' && tar xf dwd.tar && ls *_000-hd5 | head -1 | xargs gdalinfo -stats 2>&1 | grep -i 'nodata\\\\|minimum\\\\|maximum\\\\|type\\\\|band'\")"
     ]
   }
 }
