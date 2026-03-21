@@ -11,9 +11,7 @@ import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import sharp from 'sharp';
 import { BaseIngester } from './base.js';
-import { dbzToPixel } from '../utils/geo.js';
 import { config } from '../config/env.js';
 import { SOURCES } from '../config/sources.js';
 import type { IngestResult } from '../types.js';
@@ -21,32 +19,26 @@ import type { IngestResult } from '../types.js';
 const execFileAsync = promisify(execFile);
 
 /**
- * Convert precipitation rate (mm/h) to dBZ using Marshall-Palmer Z-R relationship.
- * Z = 200 * R^1.6  →  dBZ = 10 * log10(Z) = 10 * log10(200 * R^1.6)
- */
-function precipRateToDbz(rMmh: number): number {
-  if (rMmh <= 0) return -999; // NoData
-  const z = 200 * Math.pow(rMmh, 1.6);
-  return 10 * Math.log10(z);
-}
-
-/**
- * DWD-specific normalization.
+ * DWD-specific normalization — all GDAL, no sharp for Float32.
+ *
  * 1. Reproject HDF5 (polar stereographic) → EPSG:3857 as Float32
- * 2. Read reprojected raster, convert mm/h → dBZ → byte pixel value
- * 3. Write single-channel grayscale PNG matching our dBZ tile format
+ * 2. Convert mm/h → dBZ via Marshall-Palmer Z-R using gdal_calc.py
+ *    dBZ = 10 * log10(200 * R^1.6) where R is precipitation rate in mm/h
+ * 3. Scale dBZ [-10, 80] → byte [1, 255] with NoData=0
  */
 async function normalizeDwd(inputPath: string, outputPath: string): Promise<void> {
   await mkdir(path.dirname(outputPath), { recursive: true });
   const reprojected = outputPath.replace('.tif', '_reproj.tif');
+  const dbzFloat = outputPath.replace('.tif', '_dbz.tif');
 
-  // Step 1: Reproject to EPSG:3857, keep as Float32 for accurate mm/h values
-  // GDAL auto-detects polar stereographic from HDF5 metadata and applies gain/offset
+  // Step 1: Reproject to EPSG:3857, keep Float32 for mm/h precision
+  // GDAL auto-detects polar stereographic CRS from HDF5 metadata
+  // GDAL applies HDF5 gain/offset automatically → output values are mm/h
   await execFileAsync('gdalwarp', [
     '-t_srs', 'EPSG:3857',
     '-r', 'bilinear',
     '-srcnodata', '4294967295',
-    '-dstnodata', '-999',
+    '-dstnodata', '0',
     '-ot', 'Float32',
     '-of', 'GTiff',
     '-overwrite',
@@ -54,77 +46,32 @@ async function normalizeDwd(inputPath: string, outputPath: string): Promise<void
     reprojected,
   ]);
 
-  // Step 2: Read the Float32 reprojected raster via sharp
-  const { data: rawBuf, info } = await sharp(reprojected)
-    .raw()
-    .toBuffer({ resolveWithObject: true });
+  // Step 2: Convert mm/h → dBZ using Marshall-Palmer Z-R relationship
+  // Z = 200 * R^1.6, dBZ = 10 * log10(Z)
+  // gdal_calc.py does the non-linear math properly on Float32 raster data
+  await execFileAsync('gdal_calc.py', [
+    '-A', reprojected,
+    '--outfile', dbzFloat,
+    '--calc', 'where(A>0, 10*log10(200*power(A, 1.6)), -999)',
+    '--NoDataValue', '-999',
+    '--type', 'Float32',
+    '--overwrite',
+  ], { timeout: 30000 });
 
-  const width = info.width;
-  const height = info.height;
-
-  // The raw buffer contains Float32 values (4 bytes per pixel, may be multi-channel)
-  // Sharp might read as 3 channels — we need to handle that
-  const channels = info.channels;
-  const pixelCount = width * height;
-
-  // Read as Float32Array (first channel only if multi-channel)
-  const floatView = new Float32Array(rawBuf.buffer, rawBuf.byteOffset, rawBuf.byteLength / 4);
-
-  // Step 3: Convert mm/h → dBZ → byte pixel value
-  const byteData = new Uint8Array(pixelCount);
-
-  for (let i = 0; i < pixelCount; i++) {
-    const mmh = floatView[i * channels]; // First channel
-    if (mmh <= 0 || mmh === -999 || isNaN(mmh)) {
-      byteData[i] = 0; // NoData
-    } else {
-      const dbz = precipRateToDbz(mmh);
-      byteData[i] = dbzToPixel(dbz);
-    }
-  }
-
-  // Step 4: Write as single-channel byte GeoTIFF via gdal_translate from a raw file
-  // Write the byte data as a raw grayscale PNG, then convert to GeoTIFF
-  const tempPng = outputPath.replace('.tif', '_temp.png');
-  await sharp(Buffer.from(byteData.buffer), {
-    raw: { width, height, channels: 1 },
-  })
-    .png({ compressionLevel: 2 })
-    .toFile(tempPng);
-
-  // Use gdal_translate to copy geo metadata from reprojected to the byte output
+  // Step 3: Scale dBZ [-10, 80] → byte [1, 255], NoData=0
+  // Exact same scaling as MRMS pipeline
   await execFileAsync('gdal_translate', [
     '-ot', 'Byte',
+    '-scale', '-10', '80', '1', '255',
     '-a_nodata', '0',
     '-co', 'COMPRESS=LZW',
-    '-a_srs', 'EPSG:3857',
-    reprojected,
+    dbzFloat,
     outputPath,
   ]);
 
-  // Overwrite with our properly converted byte data — keep the GeoTIFF envelope
-  // Actually simpler: write as GeoTIFF directly using the reprojected geo info
-  // We need the geo transform from the reprojected file
-  const { stdout: gdalInfoJson } = await execFileAsync('gdalinfo', ['-json', reprojected]);
-  const gdalInfo = JSON.parse(gdalInfoJson);
-  const gt = gdalInfo.geoTransform;
-
-  // Write final output as GeoTIFF with correct geo metadata
-  await execFileAsync('gdal_translate', [
-    '-of', 'GTiff',
-    '-a_srs', 'EPSG:3857',
-    '-a_nodata', '0',
-    '-co', 'COMPRESS=LZW',
-    '-a_ullr',
-    String(gt[0]), String(gt[3]),
-    String(gt[0] + gt[1] * width), String(gt[3] + gt[5] * height),
-    tempPng,
-    outputPath,
-  ]);
-
-  // Cleanup
+  // Cleanup intermediate files
   await unlink(reprojected).catch(() => {});
-  await unlink(tempPng).catch(() => {});
+  await unlink(dbzFloat).catch(() => {});
 }
 
 const SOURCE = SOURCES.dwd;
