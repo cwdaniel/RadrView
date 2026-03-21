@@ -1,23 +1,24 @@
 import { Redis } from 'ioredis';
-import path from 'node:path';
 import { readFileSync } from 'node:fs';
-import { mkdir, unlink, rm, readdir, writeFile } from 'node:fs/promises';
+import { unlink } from 'node:fs/promises';
 import sharp from 'sharp';
 import { getRasterInfo } from '../utils/gdal.js';
 import {
   getTilesForBounds,
   tileToMercatorBounds,
-  isEmptyTile,
 } from '../utils/geo.js';
 import { config } from '../config/env.js';
 import { createLogger } from '../utils/logger.js';
+import { getTileStore } from '../storage/index.js';
+import type { Tile } from '../storage/index.js';
 import type { IngestResult, TileResult } from '../types.js';
 
 const logger = createLogger('tiler');
 
 async function generateTiles(
   normalizedPath: string,
-  outputDir: string,
+  source: string,
+  timestamp: string,
   zoomMin: number,
   zoomMax: number,
 ): Promise<{ tileCount: number; skipped: number }> {
@@ -139,28 +140,27 @@ async function generateTiles(
       }
     }
 
-    // Encode PNGs in parallel batches
+    // Encode PNGs in parallel batches and collect for writeBatch
     const validTiles = tileResults.filter((r): r is NonNullable<typeof r> => r !== null);
     skipped += tileResults.length - validTiles.length;
 
+    const zoomTiles: Tile[] = [];
     const BATCH = 200;
     for (let i = 0; i < validTiles.length; i += BATCH) {
       const batch = validTiles.slice(i, i + BATCH);
-      await Promise.all(batch.map(async ({ tile, pixels }) => {
-        const tilePath = path.join(outputDir, String(tile.z), String(tile.x), `${tile.y}.png`);
-        await mkdir(path.dirname(tilePath), { recursive: true });
-
+      const encoded = await Promise.all(batch.map(async ({ tile, pixels }) => {
         const png = await sharp(Buffer.from(pixels.buffer), {
           raw: { width: 256, height: 256, channels: 1 },
         })
           .grayscale()
           .png({ compressionLevel: 2 })
           .toBuffer();
-
-        await writeFile(tilePath, png);
+        return { z: tile.z, x: tile.x, y: tile.y, data: png };
       }));
+      zoomTiles.push(...encoded);
     }
 
+    await getTileStore().writeBatch(source, timestamp, zoomTiles);
     tileCount += validTiles.length;
 
     logger.debug({ z, tiles: tiles.length, generated: validTiles.length, resizeW: dstW, resizeH: dstH }, 'Zoom level complete');
@@ -170,18 +170,18 @@ async function generateTiles(
 }
 
 async function cleanupPartialDirs(redis: Redis) {
-  const tilesDir = path.join(config.dataDir, 'tiles', 'mrms');
   try {
-    const dirs = await readdir(tilesDir).catch(() => [] as string[]);
-    for (const dir of dirs) {
+    const tileStore = getTileStore();
+    const frames = await tileStore.listFrames('mrms');
+    for (const dir of frames) {
       const score = await redis.zscore('frames:mrms', dir);
       if (score === null) {
-        logger.warn({ dir }, 'Removing partial tile directory from interrupted processing');
-        await rm(path.join(tilesDir, dir), { recursive: true, force: true });
+        logger.warn({ dir }, 'Removing partial tile frame from interrupted processing');
+        await tileStore.deleteFrame('mrms', dir);
       }
     }
   } catch {
-    // tilesDir may not exist yet
+    // store may not exist yet
   }
 }
 
@@ -222,12 +222,11 @@ async function processFrame(redis: Redis, message: string) {
   logger.info({ source, timestamp }, 'Tiling new frame');
   const start = Date.now();
 
-  const outputDir = path.join(config.dataDir, 'tiles', source, timestamp);
-
   try {
     const { tileCount, skipped } = await generateTiles(
       normalizedPath,
-      outputDir,
+      source,
+      timestamp,
       config.zoomMin,
       config.zoomMax,
     );
@@ -249,7 +248,7 @@ async function processFrame(redis: Redis, message: string) {
       source,
       timestamp,
       epochMs,
-      tileDir: outputDir,
+      tileDir: '',
       tileCount,
       skipped,
       bounds,
@@ -259,7 +258,7 @@ async function processFrame(redis: Redis, message: string) {
     await unlink(normalizedPath).catch(() => {});
   } catch (error) {
     logger.error({ err: error, source, timestamp }, 'Tile generation failed');
-    await rm(outputDir, { recursive: true, force: true }).catch(() => {});
+    await getTileStore().deleteFrame(source, timestamp).catch(() => {});
   }
 }
 

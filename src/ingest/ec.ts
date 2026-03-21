@@ -1,5 +1,3 @@
-import path from 'node:path';
-import { mkdir } from 'node:fs/promises';
 import sharp from 'sharp';
 import { BaseIngester } from './base.js';
 import { fetchGetCapabilities, fetchTilePng } from '../utils/wms.js';
@@ -7,6 +5,7 @@ import { reverseMapTile } from '../utils/color-map.js';
 import { getTilesForBounds, tileToMercatorBounds } from '../utils/geo.js';
 import { config } from '../config/env.js';
 import { SOURCES } from '../config/sources.js';
+import { getTileStore, type Tile } from '../storage/index.js';
 import type { IngestResult, TileResult } from '../types.js';
 
 const SOURCE = SOURCES.ec;
@@ -90,11 +89,10 @@ export class EcIngester extends BaseIngester {
       const start = Date.now();
       let tileCount = 0;
 
-      const tileDir = path.join(config.dataDir, 'tiles', 'ec', timestamp);
-
       this.logger.info({ timestamp }, 'Fetching EC tiles');
 
-      const typeTileDir = path.join(config.dataDir, 'tiles', 'ec-type', timestamp);
+      const ecTiles: Tile[] = [];
+      const typeTiles: Tile[] = [];
 
       // 4. For each zoom level, fetch tiles in batches of 10
       for (let z = config.zoomMin; z <= config.zoomMax; z++) {
@@ -160,16 +158,14 @@ export class EcIngester extends BaseIngester {
               }
               if (!hasData) return;
 
-              // Write single-channel dBZ PNG
-              const tilePath = path.join(tileDir, String(tile.z), String(tile.x), `${tile.y}.png`);
-              await mkdir(path.dirname(tilePath), { recursive: true });
-
-              await sharp(Buffer.from(singleChannel.buffer), {
+              // Encode single-channel dBZ PNG to buffer
+              const pngData = await sharp(Buffer.from(singleChannel.buffer), {
                 raw: { width: 256, height: 256, channels: 1 },
               })
                 .grayscale()
                 .png({ compressionLevel: 6, palette: false })
-                .toFile(tilePath);
+                .toBuffer();
+              ecTiles.push({ z: tile.z, x: tile.x, y: tile.y, data: pngData });
 
               // Build type tile: 0=none, 1=rain, 2=snow (snow takes precedence)
               const typePixels = new Uint8Array(256 * 256);
@@ -181,21 +177,22 @@ export class EcIngester extends BaseIngester {
                 }
               }
 
-              const typeTilePath = path.join(typeTileDir, String(tile.z), String(tile.x), `${tile.y}.png`);
-              await mkdir(path.dirname(typeTilePath), { recursive: true });
-
-              await sharp(Buffer.from(typePixels.buffer), {
+              const typePngData = await sharp(Buffer.from(typePixels.buffer), {
                 raw: { width: 256, height: 256, channels: 1 },
               })
                 .grayscale()
                 .png({ compressionLevel: 6, palette: false })
-                .toFile(typeTilePath);
+                .toBuffer();
+              typeTiles.push({ z: tile.z, x: tile.x, y: tile.y, data: typePngData });
 
               tileCount++;
             }),
           );
         }
       }
+
+      await getTileStore().writeBatch('ec', timestamp, ecTiles);
+      await getTileStore().writeBatch('ec-type', timestamp, typeTiles);
 
       const processingMs = Date.now() - start;
       this.logger.info({ timestamp, tileCount, processingMs }, 'EC frame tiled');
@@ -223,7 +220,7 @@ export class EcIngester extends BaseIngester {
         source: 'ec',
         timestamp,
         epochMs,
-        tileDir,
+        tileDir: '',
         tileCount,
         skipped: 0,
         bounds: EC_BOUNDS,
@@ -236,7 +233,7 @@ export class EcIngester extends BaseIngester {
         source: 'ec-type',
         timestamp,
         epochMs,
-        tileDir: typeTileDir,
+        tileDir: '',
         tileCount,
         skipped: 0,
         bounds: EC_BOUNDS,

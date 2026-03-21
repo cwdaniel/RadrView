@@ -7,11 +7,12 @@ import { Redis } from 'ioredis';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
-import { readdir, readFile, writeFile, mkdir, unlink } from 'node:fs/promises';
-import { existsSync, mkdirSync } from 'node:fs';
+import { unlink } from 'node:fs/promises';
+import { mkdirSync } from 'node:fs';
 import sharp from 'sharp';
 import { config } from '../config/env.js';
 import { createLogger } from '../utils/logger.js';
+import { getTileStore, type Tile } from '../storage/index.js';
 // Upscales raw grayscale tiles — palette is applied at serve time by the server
 
 const execFileAsync = promisify(execFile);
@@ -36,38 +37,33 @@ async function processBlock(
   timestamp: string,
   blockX: number,
   blockY: number,
-): Promise<number> {
-  const tilesDir = path.join(config.dataDir, 'tiles', source, timestamp);
+): Promise<Tile[]> {
+  const tileStore = getTileStore();
   const blockPixels = BLOCK_SIZE * 256; // 1024
 
-  // Check if already upscaled
-  const checkX = blockX * BLOCK_SIZE * 4; // zoom-12 tile coord
+  // Check if already upscaled (zoom-12 anchor tile)
+  const checkX = blockX * BLOCK_SIZE * 4;
   const checkY = blockY * BLOCK_SIZE * 4;
-  const checkPath = path.join(tilesDir, '12', String(checkX), `${checkY}.png`);
-  if (existsSync(checkPath)) return 0;
+  const existing = await tileStore.readTile(source, timestamp, 12, checkX, checkY);
+  if (existing) return [];
 
   // Stitch zoom-10 tiles into one image
-  const composites: sharp.OverlayOptions[] = [];
+  const composites: Array<{ input: Buffer; left: number; top: number }> = [];
   let hasAnyData = false;
 
   for (let dy = 0; dy < BLOCK_SIZE; dy++) {
     for (let dx = 0; dx < BLOCK_SIZE; dx++) {
       const tileX = blockX * BLOCK_SIZE + dx;
       const tileY = blockY * BLOCK_SIZE + dy;
-      const tilePath = path.join(tilesDir, '10', String(tileX), `${tileY}.png`);
+      const buf = await tileStore.readTile(source, timestamp, 10, tileX, tileY);
+      if (!buf) continue;
 
-      if (!existsSync(tilePath)) continue;
-
-      composites.push({
-        input: tilePath,
-        left: dx * 256,
-        top: dy * 256,
-      });
+      composites.push({ input: buf, left: dx * 256, top: dy * 256 });
       hasAnyData = true;
     }
   }
 
-  if (!hasAnyData) return 0;
+  if (!hasAnyData) return [];
 
   // Create stitched image
   mkdirSync(TMP_DIR, { recursive: true });
@@ -89,12 +85,12 @@ async function processBlock(
   } catch (err) {
     logger.warn({ err, blockX, blockY }, 'Block upscale failed');
     await unlink(stitchedPath).catch(() => {});
-    return 0;
+    return [];
   }
 
   // Split into zoom 11 and 12 tiles
-  const upscaledBuf = await readFile(upscaledPath);
-  let tileCount = 0;
+  const upscaledBuf = await sharp(upscaledPath).toBuffer();
+  const outputTiles: Tile[] = [];
 
   for (const targetZoom of [11, 12]) {
     const zoomDiff = targetZoom - 10;
@@ -105,7 +101,6 @@ async function processBlock(
       for (let dx = 0; dx < tilesPerAxis; dx++) {
         const tileX = blockX * BLOCK_SIZE * Math.pow(2, zoomDiff) + dx;
         const tileY = blockY * BLOCK_SIZE * Math.pow(2, zoomDiff) + dy;
-        const tilePath = path.join(tilesDir, String(targetZoom), String(tileX), `${tileY}.png`);
 
         const left = dx * tilePixels;
         const top = dy * tilePixels;
@@ -129,9 +124,7 @@ async function processBlock(
         }
         if (empty) continue;
 
-        await mkdir(path.dirname(tilePath), { recursive: true });
-        await writeFile(tilePath, subTile);
-        tileCount++;
+        outputTiles.push({ z: targetZoom, x: tileX, y: tileY, data: subTile });
       }
     }
   }
@@ -140,53 +133,46 @@ async function processBlock(
   await unlink(stitchedPath).catch(() => {});
   await unlink(upscaledPath).catch(() => {});
 
-  return tileCount;
+  return outputTiles;
 }
 
 async function processFrame(source: string, timestamp: string): Promise<number> {
-  const zoom10Dir = path.join(config.dataDir, 'tiles', source, timestamp, '10');
-  if (!existsSync(zoom10Dir)) return 0;
+  const tileStore = getTileStore();
 
-  // Find all zoom-10 tile coordinates
-  const xDirs = await readdir(zoom10Dir).catch(() => [] as string[]);
-  const allTiles: Array<{ x: number; y: number }> = [];
+  // Find all zoom-10 tile coordinates via TileStore
+  const allKeys = await tileStore.listTiles(source, timestamp);
+  const zoom10Tiles = allKeys.filter(k => k.z === 10);
 
-  for (const xStr of xDirs) {
-    const x = parseInt(xStr);
-    if (isNaN(x)) continue;
-    const yFiles = await readdir(path.join(zoom10Dir, xStr)).catch(() => [] as string[]);
-    for (const yFile of yFiles) {
-      if (!yFile.endsWith('.png')) continue;
-      allTiles.push({ x, y: parseInt(yFile.replace('.png', '')) });
-    }
-  }
-
-  if (allTiles.length === 0) return 0;
+  if (zoom10Tiles.length === 0) return 0;
 
   // Group into blocks
   const blocks = new Map<string, { bx: number; by: number }>();
-  for (const t of allTiles) {
+  for (const t of zoom10Tiles) {
     const bx = Math.floor(t.x / BLOCK_SIZE);
     const by = Math.floor(t.y / BLOCK_SIZE);
     blocks.set(`${bx}_${by}`, { bx, by });
   }
 
-  logger.info({ source, timestamp, tiles: allTiles.length, blocks: blocks.size }, 'Processing blocks');
+  logger.info({ source, timestamp, tiles: zoom10Tiles.length, blocks: blocks.size }, 'Processing blocks');
 
-  let totalTiles = 0;
+  const allUpscaledTiles: Tile[] = [];
   let blocksDone = 0;
 
   for (const { bx, by } of blocks.values()) {
-    const count = await processBlock(source, timestamp, bx, by);
-    totalTiles += count;
+    const tiles = await processBlock(source, timestamp, bx, by);
+    allUpscaledTiles.push(...tiles);
     blocksDone++;
 
     if (blocksDone % 10 === 0) {
-      logger.info({ source, blocksDone, totalBlocks: blocks.size, tilesGenerated: totalTiles }, 'Upscale progress');
+      logger.info({ source, blocksDone, totalBlocks: blocks.size, tilesGenerated: allUpscaledTiles.length }, 'Upscale progress');
     }
   }
 
-  return totalTiles;
+  if (allUpscaledTiles.length > 0) {
+    await tileStore.writeBatch(source, timestamp, allUpscaledTiles);
+  }
+
+  return allUpscaledTiles.length;
 }
 
 async function main() {

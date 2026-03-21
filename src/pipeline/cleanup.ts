@@ -1,9 +1,8 @@
 import { Redis } from 'ioredis';
-import path from 'node:path';
-import { rm } from 'node:fs/promises';
 import { config } from '../config/env.js';
 import { SOURCES } from '../config/sources.js';
 import { createLogger } from '../utils/logger.js';
+import { getTileStore } from '../storage/index.js';
 
 const logger = createLogger('cleanup');
 
@@ -23,8 +22,7 @@ async function cleanup(redis: Redis): Promise<void> {
     const oldFrames = await redis.zrangebyscore(`frames:${source}`, 0, cutoffMs);
 
     for (const timestamp of oldFrames) {
-      const tileDir = path.join(config.dataDir, 'tiles', source, timestamp);
-      await rm(tileDir, { recursive: true, force: true });
+      await getTileStore().deleteFrame(source, timestamp);
       await redis.zrem(`frames:${source}`, timestamp);
       await redis.del(`frame:${timestamp}`);
     }

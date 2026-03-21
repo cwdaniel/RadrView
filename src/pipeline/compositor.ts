@@ -1,11 +1,9 @@
 import { Redis } from 'ioredis';
-import path from 'node:path';
-import { mkdir, copyFile, readdir } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
 import sharp from 'sharp';
 import { config } from '../config/env.js';
 import { SOURCES } from '../config/sources.js';
 import { createLogger } from '../utils/logger.js';
+import { getTileStore, type TileKey, type Tile } from '../storage/index.js';
 import type { TileResult } from '../types.js';
 
 const logger = createLogger('compositor');
@@ -40,30 +38,6 @@ interface SourceFrame {
   priority: number;
 }
 
-/**
- * Scan a source's tile directory to find all existing tiles.
- * Returns a Set of "z/x/y" keys for fast lookup.
- */
-async function scanTiles(baseDir: string): Promise<Set<string>> {
-  const tiles = new Set<string>();
-  if (!existsSync(baseDir)) return tiles;
-
-  const zDirs = await readdir(baseDir).catch(() => [] as string[]);
-  for (const z of zDirs) {
-    const zPath = path.join(baseDir, z);
-    const xDirs = await readdir(zPath).catch(() => [] as string[]);
-    for (const x of xDirs) {
-      const xPath = path.join(zPath, x);
-      const yFiles = await readdir(xPath).catch(() => [] as string[]);
-      for (const y of yFiles) {
-        if (y.endsWith('.png')) {
-          tiles.add(`${z}/${x}/${y.replace('.png', '')}`);
-        }
-      }
-    }
-  }
-  return tiles;
-}
 
 async function compositeFrame(redis: Redis, message: string): Promise<void> {
   const trigger: TileResult = JSON.parse(message);
@@ -87,12 +61,14 @@ async function compositeFrame(redis: Redis, message: string): Promise<void> {
     }
   }
 
-  // Scan tiles once per source (shared across targets)
-  const sourceTileSets = new Map<string, Set<string>>();
+  // List tiles once per source (shared across targets)
+  const tileStore = getTileStore();
+  const sourceTileSets = new Map<string, Map<string, TileKey>>();
   for (const [name, frame] of allFrames) {
-    const tileDir = path.join(config.dataDir, 'tiles', name, frame.timestamp);
-    const tiles = await scanTiles(tileDir);
-    sourceTileSets.set(name, tiles);
+    const keys = await tileStore.listTiles(name, frame.timestamp);
+    const keyMap = new Map<string, TileKey>();
+    for (const k of keys) keyMap.set(`${k.z}/${k.x}/${k.y}`, k);
+    sourceTileSets.set(name, keyMap);
   }
 
   // Produce each composite target
@@ -102,69 +78,77 @@ async function compositeFrame(redis: Redis, message: string): Promise<void> {
     if (sourceFrames.length === 0) continue;
 
     // Build union of tile keys for THIS target's sources only
-    const targetTileKeys = new Set<string>();
+    const targetTileKeys = new Map<string, TileKey>();
     for (const frame of sourceFrames) {
       const tiles = sourceTileSets.get(frame.name);
-      if (tiles) for (const key of tiles) targetTileKeys.add(key);
+      if (tiles) for (const [key, tk] of tiles) targetTileKeys.set(key, tk);
     }
 
     if (targetTileKeys.size === 0) continue;
 
     const compositeName = target.name;
-    const outputBaseDir = path.join(config.dataDir, 'tiles', compositeName, timestamp);
-    let totalTileCount = 0;
+    const outputTiles: Tile[] = [];
 
     const BATCH = 100;
-    const keys = Array.from(targetTileKeys);
+    const entries = Array.from(targetTileKeys.values());
 
-    for (let i = 0; i < keys.length; i += BATCH) {
-      const batch = keys.slice(i, i + BATCH);
-      await Promise.all(batch.map(async (key) => {
-        const [z, x, y] = key.split('/');
+    for (let i = 0; i < entries.length; i += BATCH) {
+      const batch = entries.slice(i, i + BATCH);
+      const batchResults = await Promise.all(batch.map(async (tk) => {
+        const { z, x, y } = tk;
+        const key = `${z}/${x}/${y}`;
 
-        const available: Array<{ frame: SourceFrame; tilePath: string }> = [];
+        const available: Array<{ frame: SourceFrame }> = [];
         for (const frame of sourceFrames) {
           if (sourceTileSets.get(frame.name)?.has(key)) {
-            available.push({
-              frame,
-              tilePath: path.join(config.dataDir, 'tiles', frame.name, frame.timestamp, z, x, `${y}.png`),
-            });
+            available.push({ frame });
           }
         }
 
-        if (available.length === 0) return;
+        if (available.length === 0) return null;
 
-        const outPath = path.join(outputBaseDir, z, x, `${y}.png`);
-        await mkdir(path.dirname(outPath), { recursive: true });
+        let tileData: Buffer;
 
         if (available.length === 1) {
-          await copyFile(available[0].tilePath, outPath);
+          const buf = await tileStore.readTile(available[0].frame.name, available[0].frame.timestamp, z, x, y);
+          if (!buf) return null;
+          tileData = buf;
         } else {
           available.sort((a, b) => a.frame.priority - b.frame.priority);
           const buffers = await Promise.all(
-            available.map(async a => ({
-              data: await sharp(a.tilePath).grayscale().raw().toBuffer(),
-              frame: a.frame,
-            })),
+            available.map(async a => {
+              const buf = await tileStore.readTile(a.frame.name, a.frame.timestamp, z, x, y);
+              if (!buf) return null;
+              return { data: await sharp(buf).grayscale().raw().toBuffer(), frame: a.frame };
+            }),
           );
+          const validBuffers = buffers.filter((b): b is NonNullable<typeof b> => b !== null);
+          if (validBuffers.length === 0) return null;
           const output = new Uint8Array(256 * 256);
-          for (const buf of buffers) {
+          for (const buf of validBuffers) {
             const pixels = new Uint8Array(buf.data.buffer, buf.data.byteOffset, buf.data.byteLength);
             for (let p = 0; p < 256 * 256 && p < pixels.length; p++) {
               if (pixels[p] > 0) output[p] = pixels[p];
             }
           }
-          await sharp(Buffer.from(output.buffer), {
+          tileData = await sharp(Buffer.from(output.buffer), {
             raw: { width: 256, height: 256, channels: 1 },
           })
             .grayscale()
             .png({ compressionLevel: 2 })
-            .toFile(outPath);
+            .toBuffer();
         }
 
-        totalTileCount++;
+        return { z, x, y, data: tileData };
       }));
+
+      for (const r of batchResults) {
+        if (r) outputTiles.push(r);
+      }
     }
+
+    await tileStore.writeBatch(compositeName, timestamp, outputTiles);
+    const totalTileCount = outputTiles.length;
 
     const durationMs = Date.now() - start;
     logger.info({ compositeName, timestamp, totalTileCount, durationMs }, 'Composite complete');

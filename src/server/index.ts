@@ -2,8 +2,8 @@ import express from 'express';
 import { createServer } from 'node:http';
 import { WebSocketServer } from 'ws';
 import path from 'node:path';
-import { existsSync, readFileSync } from 'node:fs';
 import { Redis } from 'ioredis';
+import { getTileStore } from '../storage/index.js';
 import { LRUCache } from 'lru-cache';
 import { config } from '../config/env.js';
 import { createLogger } from '../utils/logger.js';
@@ -80,11 +80,10 @@ export function createApp(redis: Redis): { app: ReturnType<typeof express> } {
 
     recordCacheMiss();
 
-    const tilePath = path.join(
-      config.dataDir, 'tiles', source, timestamp, z, x, `${y}.png`,
-    );
+    const tileStore = getTileStore();
+    const grayscalePng = await tileStore.readTile(source, timestamp, parseInt(z), parseInt(x), parseInt(y));
 
-    if (!existsSync(tilePath)) {
+    if (!grayscalePng) {
       // For zoom 11-12: try GPU-upscaled tile from parent zoom 10
       const zoomNum = parseInt(z);
       if (zoomNum >= 11 && zoomNum <= 12 && isUpscalerAvailable()) {
@@ -111,18 +110,13 @@ export function createApp(redis: Redis): { app: ReturnType<typeof express> } {
       return;
     }
 
-    const grayscalePng = readFileSync(tilePath);
-
     let colorized: Buffer;
 
     if (isTypedPalette(paletteName)) {
       // For typed palettes (e.g. precip-type), also read the type tile from {source}-type
       const typeSource = `${source}-type`;
-      const typeTilePath = path.join(
-        config.dataDir, 'tiles', typeSource, timestamp, z, x, `${y}.png`,
-      );
-      if (existsSync(typeTilePath)) {
-        const typePng = readFileSync(typeTilePath);
+      const typePng = await tileStore.readTile(typeSource, timestamp, parseInt(z), parseInt(x), parseInt(y));
+      if (typePng) {
         colorized = await colorizePrecipType(grayscalePng, typePng);
       } else {
         // Fall back to default palette if type tile not available
