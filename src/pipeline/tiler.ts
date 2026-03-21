@@ -153,6 +153,7 @@ async function generateTiles(
         const png = await sharp(Buffer.from(pixels.buffer), {
           raw: { width: 256, height: 256, channels: 1 },
         })
+          .grayscale()
           .png({ compressionLevel: 2 })
           .toBuffer();
 

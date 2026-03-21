@@ -167,6 +167,7 @@ export class EcIngester extends BaseIngester {
               await sharp(Buffer.from(singleChannel.buffer), {
                 raw: { width: 256, height: 256, channels: 1 },
               })
+                .grayscale()
                 .png({ compressionLevel: 6, palette: false })
                 .toFile(tilePath);
 
@@ -174,20 +175,19 @@ export class EcIngester extends BaseIngester {
               const typePixels = new Uint8Array(256 * 256);
               for (let j = 0; j < typePixels.length; j++) {
                 if (snowPixels[j] > 0) {
-                  typePixels[j] = 2; // snow (takes precedence over rain)
+                  typePixels[j] = 2;
                 } else if (rainPixels[j] > 0) {
-                  typePixels[j] = 1; // rain
+                  typePixels[j] = 1;
                 }
-                // else 0 (no precip)
               }
 
-              // Write type PNG
               const typeTilePath = path.join(typeTileDir, String(tile.z), String(tile.x), `${tile.y}.png`);
               await mkdir(path.dirname(typeTilePath), { recursive: true });
 
               await sharp(Buffer.from(typePixels.buffer), {
                 raw: { width: 256, height: 256, channels: 1 },
               })
+                .grayscale()
                 .png({ compressionLevel: 6, palette: false })
                 .toFile(typeTilePath);
 

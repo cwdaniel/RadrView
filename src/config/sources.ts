@@ -66,7 +66,7 @@ export const SOURCES: Record<string, SourceConfig> = {
   // Europe — dBZ
   dwd: {
     name: 'dwd',
-    bounds: { west: 2, south: 46, east: 17, north: 56 },
+    bounds: { west: 1.4, south: 45.6, east: 18.8, north: 56.3 },
     priority: 10,
     pollIntervalMs: 60_000,
     product: 'rv',

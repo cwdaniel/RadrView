@@ -157,6 +157,7 @@ async function compositeFrame(redis: Redis, message: string): Promise<void> {
           await sharp(Buffer.from(output.buffer), {
             raw: { width: 256, height: 256, channels: 1 },
           })
+            .grayscale()
             .png({ compressionLevel: 2 })
             .toFile(outPath);
         }
