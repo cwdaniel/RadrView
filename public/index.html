@@ -82,6 +82,12 @@
       align-items: stretch;
       margin-top: 8px;
     }
+    .playback { margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.08); }
+    .playback label { display: block; margin-bottom: 6px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px; color: #888; }
+    .playback-controls { display: flex; align-items: center; gap: 8px; }
+    .playback-controls button { background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.15); color: #fff; border-radius: 6px; width: 32px; height: 28px; cursor: pointer; font-size: 12px; }
+    .playback-controls button:hover { background: rgba(255,255,255,0.2); }
+    .playback-controls input[type=range] { flex: 1; }
   </style>
 </head>
 <body>
@@ -117,6 +123,24 @@
       <div>Age: <span class="value" id="frame-age">--</span></div>
       <div>Tiles: <span class="value" id="tile-count">--</span></div>
     </div>
+
+    <div class="playback">
+      <label>Animation</label>
+      <div class="playback-controls">
+        <button id="play-btn" title="Play/Pause">&#9654;</button>
+        <input type="range" id="timeline" min="0" max="0" value="0" style="flex:1">
+        <span id="frame-time" style="font-size:11px;color:#aee;min-width:50px">--:--</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:10px;color:#666;margin-top:2px">
+        <span id="timeline-start">--</span>
+        <span>Speed: <select id="play-speed" style="background:rgba(255,255,255,0.06);color:#e0e0e0;border:1px solid rgba(255,255,255,0.12);border-radius:4px;font-size:10px">
+          <option value="500">Fast</option>
+          <option value="1000" selected>Normal</option>
+          <option value="2000">Slow</option>
+        </select></span>
+        <span id="timeline-end">--</span>
+      </div>
+    </div>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -124,6 +148,17 @@
     const API = window.location.origin;
     let radarLayer = null;
     let currentFrame = null;
+    let frames = [];
+    let playing = false;
+    let playInterval = null;
+    let liveMode = true;
+
+    function formatAge(seconds) {
+      if (seconds < 60) return seconds + 's';
+      if (seconds < 3600) return Math.floor(seconds / 60) + 'm ' + (seconds % 60) + 's';
+      if (seconds < 86400) return Math.floor(seconds / 3600) + 'h ' + Math.floor((seconds % 3600) / 60) + 'm';
+      return Math.floor(seconds / 86400) + 'd ' + Math.floor((seconds % 86400) / 3600) + 'h';
+    }
 
     // Init map centered on North America
     const map = L.map('map', { zoomControl: false }).setView([42, -95], 5);
@@ -184,7 +219,7 @@
         const changed = currentFrame !== data.timestamp;
         currentFrame = data.timestamp;
         document.getElementById('frame-ts').textContent = data.timestamp;
-        document.getElementById('frame-age').textContent = data.age + 's';
+        document.getElementById('frame-age').textContent = formatAge(data.age);
         // Fetch frame count
         fetch(`${API}/frames?source=${source}&limit=1000`).then(r=>r.json()).then(d=>{
           document.getElementById('tile-count').textContent = d.count + ' frames';
@@ -201,7 +236,10 @@
       addRadarLayer();
     });
     document.getElementById('source').addEventListener('change', () => {
+      stopPlayback();
+      liveMode = true;
       fetchLatestFrame();
+      loadFrames();
     });
     document.getElementById('opacity').addEventListener('input', () => {
       if (radarLayer) radarLayer.setOpacity(document.getElementById('opacity').value / 100);
@@ -223,7 +261,7 @@
         if (msg.type === 'new-frame') {
           currentFrame = msg.timestamp;
           document.getElementById('frame-ts').textContent = msg.timestamp;
-          document.getElementById('frame-age').textContent = '0s';
+          document.getElementById('frame-age').textContent = formatAge(0);
           // Flash the status to show a live update arrived
           wsStatus.textContent = 'new frame!';
           wsStatus.style.color = '#ff0';
@@ -232,6 +270,9 @@
             wsStatus.style.color = '#4f4';
           }, 2000);
           addRadarLayer();
+          if (liveMode) {
+            loadFrames(); // Refresh frame list
+          }
         }
       };
 
@@ -258,10 +299,84 @@
       });
     }
 
+    // Animation / Time Machine
+    async function loadFrames() {
+      const source = document.getElementById('source').value;
+      const res = await fetch(`${API}/frames?source=${source}&limit=720`);
+      const data = await res.json();
+      frames = data.frames;
+      const timeline = document.getElementById('timeline');
+      timeline.max = Math.max(0, frames.length - 1);
+      timeline.value = frames.length - 1;
+      if (frames.length > 0) {
+        document.getElementById('timeline-start').textContent = formatFrameTime(frames[0].timestamp);
+        document.getElementById('timeline-end').textContent = formatFrameTime(frames[frames.length - 1].timestamp);
+      }
+    }
+
+    function formatFrameTime(ts) {
+      // YYYYMMDDHHMMSS -> HH:MM
+      return ts.slice(8, 10) + ':' + ts.slice(10, 12);
+    }
+
+    document.getElementById('play-btn').addEventListener('click', () => {
+      if (playing) {
+        stopPlayback();
+      } else {
+        startPlayback();
+      }
+    });
+
+    document.getElementById('play-btn').addEventListener('dblclick', () => {
+      stopPlayback();
+      liveMode = true;
+      const timeline = document.getElementById('timeline');
+      timeline.value = frames.length - 1;
+      fetchLatestFrame();
+    });
+
+    function startPlayback() {
+      playing = true;
+      liveMode = false;
+      document.getElementById('play-btn').textContent = '\u23F8';
+      const speed = parseInt(document.getElementById('play-speed').value);
+      playInterval = setInterval(() => {
+        const timeline = document.getElementById('timeline');
+        let idx = parseInt(timeline.value) + 1;
+        if (idx >= frames.length) idx = 0;
+        timeline.value = idx;
+        showFrame(idx);
+      }, speed);
+    }
+
+    function stopPlayback() {
+      playing = false;
+      document.getElementById('play-btn').textContent = '\u25B6';
+      if (playInterval) { clearInterval(playInterval); playInterval = null; }
+    }
+
+    document.getElementById('timeline').addEventListener('input', (e) => {
+      liveMode = false;
+      stopPlayback();
+      showFrame(parseInt(e.target.value));
+    });
+
+    function showFrame(idx) {
+      if (idx < 0 || idx >= frames.length) return;
+      const frame = frames[idx];
+      currentFrame = frame.timestamp;
+      document.getElementById('frame-ts').textContent = frame.timestamp;
+      document.getElementById('frame-time').textContent = formatFrameTime(frame.timestamp);
+      const age = Math.floor((Date.now() - frame.epochMs) / 1000);
+      document.getElementById('frame-age').textContent = formatAge(age);
+      addRadarLayer();
+    }
+
     // Init
     loadSources();
     loadPalettes();
     fetchLatestFrame();
+    loadFrames();
     connectWebSocket();
     // Fallback polling in case WebSocket disconnects
     setInterval(fetchLatestFrame, 60000);

@@ -11,6 +11,7 @@ import { createFramesRouter } from './frames.js';
 import { createHealthRouter } from './health.js';
 import { loadPalettes, getLUT, colorizeTilePng, createPaletteRouter } from './palette.js';
 import { getUpscaledTile, isUpscalerAvailable } from './upscale.js';
+import { createMetricsRouter, recordCacheHit, recordCacheMiss, recordServeDuration } from './metrics.js';
 
 const logger = createLogger('server');
 
@@ -49,9 +50,11 @@ export function createApp(redis: Redis): { app: ReturnType<typeof express> } {
   app.use(createFramesRouter(redis));
   app.use(createHealthRouter(redis));
   app.use(createPaletteRouter());
+  app.use(createMetricsRouter(redis));
 
   // Tile endpoint
   app.get('/tile/:timestamp/:z/:x/:y', async (req, res) => {
+    const serveStart = Date.now();
     const { timestamp, z, x, y } = req.params;
     const paletteName = (req.query.palette as string) || 'default';
     const source = (req.query.source as string) || 'composite';
@@ -66,12 +69,16 @@ export function createApp(redis: Redis): { app: ReturnType<typeof express> } {
 
     const cached = tileCache.get(cacheKey);
     if (cached) {
+      recordCacheHit();
       res.setHeader('Content-Type', 'image/png');
       res.setHeader('X-Cache', 'hit');
       await setCacheHeaders(res, timestamp, redis);
       res.send(cached);
+      recordServeDuration(Date.now() - serveStart);
       return;
     }
+
+    recordCacheMiss();
 
     const tilePath = path.join(
       config.dataDir, 'tiles', source, timestamp, z, x, `${y}.png`,
@@ -92,6 +99,7 @@ export function createApp(redis: Redis): { app: ReturnType<typeof express> } {
           res.setHeader('X-Cache', 'upscaled');
           await setCacheHeaders(res, timestamp, redis);
           res.send(upscaled);
+          recordServeDuration(Date.now() - serveStart);
           return;
         }
       }
@@ -99,6 +107,7 @@ export function createApp(redis: Redis): { app: ReturnType<typeof express> } {
       res.setHeader('Content-Type', 'image/png');
       await setCacheHeaders(res, timestamp, redis);
       res.send(TRANSPARENT_PNG);
+      recordServeDuration(Date.now() - serveStart);
       return;
     }
 
@@ -110,6 +119,7 @@ export function createApp(redis: Redis): { app: ReturnType<typeof express> } {
     res.setHeader('X-Cache', 'miss');
     await setCacheHeaders(res, timestamp, redis);
     res.send(colorized);
+    recordServeDuration(Date.now() - serveStart);
   });
 
   return { app };
