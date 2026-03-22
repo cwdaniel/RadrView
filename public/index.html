@@ -6,351 +6,823 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>RadrView</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
+    :root {
+      --bg: #0d0f12;
+      --surface: #151820;
+      --surface-2: #1b1f2a;
+      --surface-3: #222736;
+      --border: rgba(255,255,255,0.07);
+      --border-focus: rgba(255,255,255,0.15);
+      --text: #d1d5de;
+      --text-2: #8b90a0;
+      --text-3: #585e70;
+      --green: #3ddc84;
+      --green-dim: rgba(61,220,132,0.12);
+      --blue: #5b9bd5;
+      --orange: #e8a44a;
+      --red: #d94f4f;
+      --radar-accent: #5b9bd5;
+    }
+
     * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #1a1a2e; overflow: hidden; }
-    #map { width: 100vw; height: calc(100vh - 48px); margin-top: 48px; }
 
-    /* Panel — desktop: top-right card, mobile: bottom sheet */
-    .panel {
-      position: absolute;
-      z-index: 1000;
-      background: rgba(20, 20, 36, 0.95);
-      color: #e0e0e0;
-      font-size: 13px;
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
-      border: 1px solid rgba(255,255,255,0.08);
-      box-shadow: 0 4px 30px rgba(0,0,0,0.5);
-      transition: transform 0.3s ease;
+    body {
+      font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      overflow: hidden;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
     }
 
-    /* Desktop layout */
-    @media (min-width: 641px) {
-      .panel {
-        top: 60px; right: 12px;
-        border-radius: 12px;
-        padding: 14px 16px;
-        min-width: 220px;
-        max-width: 260px;
-        max-height: calc(100vh - 24px);
-        overflow-y: auto;
-      }
-      .panel-handle { display: none; }
-      .panel.collapsed .panel-body { display: none; }
+    /* ── Top Bar ── */
+    .topbar {
+      height: 48px;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      gap: 0;
+      padding: 0 16px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      z-index: 1001;
     }
 
-    /* Mobile layout — bottom sheet */
-    @media (max-width: 640px) {
-      .panel {
-        bottom: 0; left: 0; right: 0;
-        border-radius: 16px 16px 0 0;
-        padding: 0 16px 16px;
-        max-height: 70vh;
-        overflow-y: auto;
-        transform: translateY(calc(100% - 90px));
-      }
-      .panel.open { transform: translateY(0); }
-      .panel-handle {
-        display: flex;
-        justify-content: center;
-        padding: 10px 0 6px;
-        cursor: pointer;
-      }
-      .panel-handle::after {
-        content: '';
-        width: 36px; height: 4px;
-        background: rgba(255,255,255,0.25);
-        border-radius: 2px;
-      }
-      .panel h3 { font-size: 14px; }
-      .panel select, .panel button { font-size: 14px; min-height: 36px; }
+    .topbar-logo {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
+      text-decoration: none;
+      color: var(--text);
     }
-
-    .panel h3 {
-      margin: 0 0 8px;
+    .topbar-logo svg {
+      width: 20px;
+      height: 20px;
+      color: var(--radar-accent);
+    }
+    .topbar-logo span {
       font-size: 15px;
       font-weight: 600;
       color: #fff;
-      letter-spacing: 0.5px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
+      letter-spacing: 0.2px;
     }
-    .panel h3 .live-dot {
-      width: 8px; height: 8px;
-      border-radius: 50%;
-      background: #f44;
-      display: inline-block;
+    .topbar-logo small {
+      font-size: 9px;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--text-3);
+      background: var(--surface-3);
+      border: 1px solid var(--border);
+      padding: 1px 5px;
+      border-radius: 3px;
+      align-self: center;
     }
-    .panel h3 .live-dot.connected { background: #4f4; }
 
-    .panel label {
-      display: block;
-      margin: 8px 0 4px;
-      font-size: 10px;
+    .topbar-sep {
+      width: 1px;
+      height: 20px;
+      background: var(--border);
+      margin: 0 16px;
+      flex-shrink: 0;
+    }
+
+    .topbar-search {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0 10px;
+      flex: 1;
+      max-width: 280px;
+      height: 32px;
+      transition: border-color 0.15s;
+    }
+    .topbar-search:focus-within {
+      border-color: var(--border-focus);
+    }
+    .topbar-search svg {
+      width: 14px;
+      height: 14px;
+      color: var(--text-3);
+      flex-shrink: 0;
+    }
+    .topbar-search input {
+      background: none;
+      border: none;
+      outline: none;
+      color: var(--text);
+      font-family: inherit;
+      font-size: 13px;
+      width: 100%;
+    }
+    .topbar-search input::placeholder {
+      color: var(--text-3);
+    }
+
+    /* Search autocomplete */
+    .search-results {
+      position: absolute;
+      top: 48px;
+      left: 0;
+      background: var(--surface-2);
+      border: 1px solid var(--border-focus);
+      border-top: none;
+      border-radius: 0 0 6px 6px;
+      min-width: 260px;
+      z-index: 2000;
+      display: none;
+    }
+    .search-result-item {
+      padding: 8px 12px;
+      cursor: pointer;
+      font-size: 13px;
+      color: var(--text);
+      border-bottom: 1px solid var(--border);
+    }
+    .search-result-item:last-child { border-bottom: none; }
+    .search-result-item:hover { background: var(--surface-3); }
+
+    .topbar-meta {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      margin-left: auto;
+      flex-shrink: 0;
+    }
+    .topbar-meta > span {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--text-2);
+      padding: 0 10px;
+      border-right: 1px solid var(--border);
+    }
+    .topbar-meta > span:last-of-type { border-right: none; }
+    .topbar-meta a {
+      color: var(--text-2);
+      text-decoration: none;
+      font-size: 12px;
+      padding: 5px 10px;
+      border-radius: 5px;
+      transition: color 0.15s, background 0.15s;
+    }
+    .topbar-meta a:hover { color: #fff; background: var(--surface-3); }
+
+    .status-dot {
+      display: inline-block;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--red);
+      flex-shrink: 0;
+    }
+    .status-dot.connected {
+      background: var(--green);
+      animation: pulse-dot 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(61, 220, 132, 0.4); }
+      50% { opacity: 0.85; box-shadow: 0 0 0 4px rgba(61, 220, 132, 0); }
+    }
+
+    /* ── Main content area ── */
+    .main {
+      flex: 1;
+      display: flex;
+      overflow: hidden;
+      position: relative;
+    }
+
+    /* ── Map ── */
+    #map {
+      flex: 1;
+      background: #0a0c10;
+    }
+
+    /* Leaflet overrides */
+    .leaflet-control-zoom {
+      border: 1px solid var(--border) !important;
+      border-radius: 6px !important;
+      overflow: hidden;
+    }
+    .leaflet-control-zoom a {
+      background: var(--surface) !important;
+      color: var(--text-2) !important;
+      border-bottom: 1px solid var(--border) !important;
+      width: 28px !important;
+      height: 28px !important;
+      line-height: 28px !important;
+      font-size: 15px !important;
+    }
+    .leaflet-control-zoom a:hover {
+      background: var(--surface-2) !important;
+      color: #fff !important;
+    }
+    .leaflet-control-zoom-in { border-bottom: 1px solid var(--border) !important; }
+    .leaflet-control-zoom-out { border-bottom: none !important; }
+    .leaflet-control-attribution { display: none !important; }
+    .leaflet-bar { box-shadow: 0 2px 8px rgba(0,0,0,0.4) !important; }
+
+    /* Map legend overlay */
+    .map-legend {
+      position: absolute;
+      bottom: 80px;
+      left: 12px;
+      z-index: 1000;
+      background: rgba(13, 15, 18, 0.88);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 10px;
+      pointer-events: none;
+    }
+    .map-legend-label {
+      font-size: 9px;
       text-transform: uppercase;
       letter-spacing: 0.8px;
-      color: #666;
+      color: var(--text-3);
+      margin-bottom: 5px;
     }
-    .panel select {
+    .map-legend-bar {
+      display: flex;
+      height: 8px;
+      border-radius: 3px;
+      overflow: hidden;
+      width: 120px;
+    }
+    .map-legend-ticks {
+      display: flex;
+      justify-content: space-between;
+      width: 120px;
+      margin-top: 3px;
+    }
+    .map-legend-ticks span {
+      font-size: 8px;
+      color: var(--text-3);
+      font-family: 'IBM Plex Mono', monospace;
+    }
+
+    /* ── Sidebar ── */
+    .sidebar {
+      width: 280px;
+      flex-shrink: 0;
+      background: var(--surface);
+      border-left: 1px solid var(--border);
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .sidebar::-webkit-scrollbar { width: 4px; }
+    .sidebar::-webkit-scrollbar-track { background: transparent; }
+    .sidebar::-webkit-scrollbar-thumb { background: var(--border-focus); border-radius: 2px; }
+
+    .sidebar-section {
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .sidebar-section:last-child { border-bottom: none; }
+
+    .sidebar-label {
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--text-3);
+      margin-bottom: 10px;
+    }
+
+    /* Sidebar selects */
+    .sidebar select {
       width: 100%;
-      padding: 6px 8px;
+      padding: 7px 10px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
       border-radius: 6px;
-      border: 1px solid rgba(255,255,255,0.12);
-      background: rgba(255,255,255,0.06);
-      color: #e0e0e0;
+      color: var(--text);
+      font-family: inherit;
       font-size: 13px;
       cursor: pointer;
       -webkit-appearance: none;
+      appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23585e70' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 10px center;
+      padding-right: 28px;
+      transition: border-color 0.15s;
     }
-    .panel select:focus { outline: none; border-color: rgba(100, 200, 255, 0.4); }
+    .sidebar select:focus {
+      outline: none;
+      border-color: var(--border-focus);
+    }
+    .sidebar select option {
+      background: var(--surface-2);
+      color: var(--text);
+    }
 
-    .row { display: flex; gap: 8px; align-items: center; }
-    .row > * { flex: 1; }
-
-    .status-bar {
+    /* Opacity slider */
+    .opacity-row {
       display: flex;
-      justify-content: space-between;
-      font-size: 10px;
-      color: #666;
-      margin-top: 8px;
-      padding-top: 8px;
-      border-top: 1px solid rgba(255,255,255,0.06);
+      align-items: center;
+      gap: 10px;
     }
-    .status-bar .val { color: #9cf; }
+    .opacity-row input[type=range] {
+      flex: 1;
+      -webkit-appearance: none;
+      appearance: none;
+      height: 4px;
+      border-radius: 2px;
+      background: var(--surface-3);
+      outline: none;
+      cursor: pointer;
+    }
+    .opacity-row input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--radar-accent);
+      cursor: pointer;
+      border: 2px solid var(--surface);
+      box-shadow: 0 0 0 1px var(--radar-accent);
+    }
+    .opacity-row input[type=range]::-moz-range-thumb {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--radar-accent);
+      cursor: pointer;
+      border: 2px solid var(--surface);
+    }
+    .opacity-val {
+      font-size: 11px;
+      color: var(--text-2);
+      font-family: 'IBM Plex Mono', monospace;
+      min-width: 30px;
+      text-align: right;
+    }
 
-    .legend-row {
-      display: flex;
-      gap: 6px;
-      align-items: stretch;
-      margin-top: 8px;
-    }
-    .legend-img {
-      display: block;
-      height: 120px;
-      width: 20px;
-      border-radius: 4px;
-      border: 1px solid rgba(255,255,255,0.1);
-    }
-    .legend-labels {
+    /* dBZ Reference */
+    .dbz-legend {
       display: flex;
       flex-direction: column;
-      justify-content: space-between;
-      height: 120px;
-      font-size: 9px;
-      color: #666;
+      gap: 4px;
     }
-
-    .playback { margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.06); }
-    .playback-controls { display: flex; align-items: center; gap: 6px; }
-    .playback-controls button {
-      background: rgba(255,255,255,0.1);
-      border: 1px solid rgba(255,255,255,0.15);
-      color: #fff;
-      border-radius: 6px;
-      width: 36px; height: 32px;
-      cursor: pointer;
-      font-size: 14px;
+    .dbz-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .dbz-swatch {
+      width: 12px;
+      height: 12px;
+      border-radius: 2px;
       flex-shrink: 0;
     }
-    .playback-controls button:active { background: rgba(255,255,255,0.25); }
-    .playback-controls input[type=range] { flex: 1; min-width: 0; }
-    .playback-meta {
+    .dbz-label {
+      font-size: 11px;
+      color: var(--text-2);
+    }
+    .dbz-range {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 10px;
+      color: var(--text-3);
+      margin-left: auto;
+    }
+
+    /* Data sources */
+    .source-list {
       display: flex;
-      justify-content: space-between;
-      font-size: 9px;
-      color: #555;
-      margin-top: 2px;
+      flex-direction: column;
+      gap: 8px;
     }
-    /* Top navbar — matches landing page */
-    .navbar {
-      position: fixed;
-      top: 0; left: 0; right: 0;
-      z-index: 1001;
-      height: 48px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 0 20px;
-      background: rgba(10, 10, 24, 0.92);
-      backdrop-filter: blur(10px);
-      -webkit-backdrop-filter: blur(10px);
-      border-bottom: 1px solid rgba(255,255,255,0.06);
-    }
-    .navbar-brand {
-      font-size: 16px;
-      font-weight: 700;
-      color: #fff;
-      letter-spacing: 0.5px;
-      text-decoration: none;
-    }
-    .navbar-brand .accent { color: #44aaee; }
-    .navbar-brand .dot {
-      display: inline-block;
-      width: 8px; height: 8px;
-      border-radius: 50%;
-      background: #f44;
-      margin-right: 6px;
-    }
-    .navbar-brand .dot.connected { background: #4f4; animation: pulse 2s infinite; }
-    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
-    .navbar-links {
+    .source-item {
       display: flex;
       align-items: center;
-      gap: 6px;
-    }
-    .navbar-links a {
-      display: flex;
-      align-items: center;
-      gap: 5px;
-      color: #888;
-      text-decoration: none;
-      font-size: 13px;
-      padding: 6px 12px;
+      gap: 8px;
+      padding: 8px 10px;
+      background: var(--surface-2);
       border-radius: 6px;
-      transition: color 0.15s, background 0.15s;
+      border: 1px solid var(--border);
     }
-    .navbar-links a:hover { color: #fff; background: rgba(255,255,255,0.06); }
-    .navbar-links svg { width: 16px; height: 16px; fill: currentColor; }
-    @media (max-width: 640px) {
-      .navbar-links a span { display: none; }
-      .navbar-links a { padding: 6px 8px; }
+    .source-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .source-dot.ok { background: var(--green); }
+    .source-dot.stale { background: var(--orange); }
+    .source-dot.unknown { background: var(--text-3); }
+    .source-name {
+      font-size: 12px;
+      color: var(--text);
+      flex: 1;
+      text-transform: capitalize;
+    }
+    .source-age {
+      font-size: 10px;
+      color: var(--text-3);
+      font-family: 'IBM Plex Mono', monospace;
+    }
+
+    /* About */
+    .about-text {
+      font-size: 11px;
+      color: var(--text-3);
+      line-height: 1.6;
+    }
+    .about-text a {
+      color: var(--radar-accent);
+      text-decoration: none;
+    }
+    .about-text a:hover { text-decoration: underline; }
+
+    /* ── Timeline Bar ── */
+    .timeline-bar {
+      height: 64px;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 0 12px;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      z-index: 1001;
+    }
+
+    .timeline-controls {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      flex-shrink: 0;
+    }
+
+    .tl-btn {
+      width: 32px;
+      height: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text-2);
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
+    }
+    .tl-btn:hover {
+      background: var(--surface-3);
+      color: #fff;
+      border-color: var(--border-focus);
+    }
+    .tl-btn svg {
+      width: 14px;
+      height: 14px;
+    }
+    #btnPlay {
+      background: var(--radar-accent);
+      border-color: var(--radar-accent);
+      color: #fff;
+    }
+    #btnPlay:hover {
+      background: #4a8ec2;
+      border-color: #4a8ec2;
+      color: #fff;
+    }
+
+    .timeline-track-wrapper {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+
+    .timeline-track {
+      height: 28px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      overflow: hidden;
+      cursor: pointer;
+      position: relative;
+    }
+
+    .timeline-frames {
+      display: flex;
+      height: 100%;
+      gap: 1px;
+      padding: 2px;
+    }
+
+    .tl-frame {
+      flex: 1;
+      height: 100%;
+      border-radius: 2px;
+      background: var(--surface-3);
+      cursor: pointer;
+      transition: background 0.1s;
+      min-width: 3px;
+    }
+    .tl-frame:hover { background: rgba(91, 155, 213, 0.4); }
+    .tl-frame.active {
+      background: var(--radar-accent);
+      box-shadow: 0 0 0 1px rgba(91, 155, 213, 0.5);
+    }
+
+    .timeline-timestamps {
+      display: flex;
+      justify-content: space-between;
+      padding: 0 2px;
+    }
+    .timeline-timestamps span {
+      font-size: 9px;
+      color: var(--text-3);
+      font-family: 'IBM Plex Mono', monospace;
+    }
+
+    .tl-timestamp {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 12px;
+      color: var(--text);
+      flex-shrink: 0;
+      min-width: 72px;
+      text-align: right;
+    }
+
+    /* ── Mobile ── */
+    @media (max-width: 767px) {
+      .sidebar { display: none; }
+      .topbar-search { max-width: 160px; }
+      .topbar-logo small { display: none; }
+      .tl-timestamp { display: none; }
+    }
+    @media (max-width: 480px) {
+      .topbar-sep { display: none; }
+      .topbar-search { max-width: 120px; }
     }
   </style>
 </head>
 <body>
-  <nav class="navbar">
-    <a href="/" class="navbar-brand">
-      <span class="dot" id="live-dot" title="disconnected"></span>
-      Radr<span class="accent">View</span>
+
+  <!-- Top Bar -->
+  <div class="topbar">
+    <a href="/" class="topbar-logo">
+      <!-- Radar icon -->
+      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="10" cy="10" r="2"/>
+        <path d="M10 10 L17 5"/>
+        <circle cx="10" cy="10" r="5" stroke-opacity="0.4"/>
+        <circle cx="10" cy="10" r="8.5" stroke-opacity="0.2"/>
+      </svg>
+      <span>RadrView</span>
+      <small>oss</small>
     </a>
-    <div class="navbar-links">
-      <a href="/#features"><span>Features</span></a>
-      <a href="/#coverage"><span>Coverage</span></a>
-      <a href="/docs"><span>Docs</span></a>
-      <a href="https://github.com/cwdaniel/radrview" target="_blank" rel="noopener">
-        <svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
-        <span>GitHub</span>
-      </a>
+
+    <div class="topbar-sep"></div>
+
+    <div class="topbar-search" style="position:relative">
+      <!-- Search icon -->
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="6.5" cy="6.5" r="4.5"/>
+        <path d="M10 10l3 3"/>
+      </svg>
+      <input id="searchInput" placeholder="Search location…" autocomplete="off" />
+      <div class="search-results" id="searchResults"></div>
     </div>
-  </nav>
 
-  <div id="map"></div>
-
-  <div class="panel" id="panel">
-    <div class="panel-handle" id="panel-handle"></div>
-
-    <h3>Controls</h3>
-
-    <div class="panel-body">
-      <div class="row">
-        <div>
-          <label>Palette</label>
-          <select id="palette"></select>
-        </div>
-        <div>
-          <label>Source</label>
-          <select id="source">
-            <option value="composite" selected>Global</option>
-          </select>
-        </div>
-      </div>
-
-      <label>Opacity</label>
-      <input type="range" id="opacity" min="0" max="100" value="70" style="width:100%">
-
-      <div class="legend-row">
-        <img id="legend" class="legend-img" />
-        <div class="legend-labels">
-          <span>70+</span>
-          <span>50</span>
-          <span>35</span>
-          <span>20</span>
-          <span>5 dBZ</span>
-        </div>
-      </div>
-
-      <div class="status-bar">
-        <span>Frame: <span class="val" id="frame-ts">--</span></span>
-        <span>Age: <span class="val" id="frame-age">--</span></span>
-        <span><span class="val" id="tile-count">--</span></span>
-      </div>
-
-      <div class="playback">
-        <div class="playback-controls">
-          <button id="play-btn" title="Play/Pause">&#9654;</button>
-          <input type="range" id="timeline" min="0" max="0" value="0">
-          <span style="font-size:11px;color:#9cf;min-width:40px;text-align:right" id="frame-time">--:--</span>
-        </div>
-        <div class="playback-meta">
-          <span id="timeline-start">--</span>
-          <span>
-            <select id="play-speed" style="background:rgba(255,255,255,0.06);color:#ccc;border:1px solid rgba(255,255,255,0.1);border-radius:4px;font-size:9px;padding:1px 4px">
-              <option value="500">Fast</option>
-              <option value="1000" selected>Normal</option>
-              <option value="2000">Slow</option>
-            </select>
-          </span>
-          <span id="timeline-end">--</span>
-        </div>
-      </div>
-
+    <div class="topbar-meta">
+      <span>
+        <span class="status-dot" id="live-dot"></span>
+        Live radar
+      </span>
+      <span id="updateTime">--</span>
+      <a href="/docs">Docs</a>
+      <a href="https://github.com/cwdaniel/radrview" target="_blank" rel="noopener">GitHub</a>
     </div>
+  </div>
+
+  <!-- Main -->
+  <div class="main">
+    <div id="map"></div>
+
+    <!-- Right Sidebar -->
+    <aside class="sidebar">
+
+      <!-- Palette -->
+      <div class="sidebar-section">
+        <div class="sidebar-label">Palette</div>
+        <select id="palette"></select>
+      </div>
+
+      <!-- Source -->
+      <div class="sidebar-section">
+        <div class="sidebar-label">Source</div>
+        <select id="source">
+          <option value="composite" selected>Global composite</option>
+        </select>
+      </div>
+
+      <!-- Opacity -->
+      <div class="sidebar-section">
+        <div class="sidebar-label">Opacity</div>
+        <div class="opacity-row">
+          <input type="range" id="opacity" min="0" max="100" value="70">
+          <span class="opacity-val" id="opacityVal">70%</span>
+        </div>
+      </div>
+
+      <!-- dBZ Reference -->
+      <div class="sidebar-section">
+        <div class="sidebar-label">dBZ Reference</div>
+        <div class="dbz-legend">
+          <div class="dbz-row">
+            <div class="dbz-swatch" style="background:#07a309"></div>
+            <span class="dbz-label">Light</span>
+            <span class="dbz-range">5–15</span>
+          </div>
+          <div class="dbz-row">
+            <div class="dbz-swatch" style="background:#01c501"></div>
+            <span class="dbz-label">Light-Moderate</span>
+            <span class="dbz-range">15–25</span>
+          </div>
+          <div class="dbz-row">
+            <div class="dbz-swatch" style="background:#fcee00"></div>
+            <span class="dbz-label">Moderate</span>
+            <span class="dbz-range">25–35</span>
+          </div>
+          <div class="dbz-row">
+            <div class="dbz-swatch" style="background:#f4b800"></div>
+            <span class="dbz-label">Moderate-Heavy</span>
+            <span class="dbz-range">35–45</span>
+          </div>
+          <div class="dbz-row">
+            <div class="dbz-swatch" style="background:#f40000"></div>
+            <span class="dbz-label">Heavy</span>
+            <span class="dbz-range">45–55</span>
+          </div>
+          <div class="dbz-row">
+            <div class="dbz-swatch" style="background:#bc0000"></div>
+            <span class="dbz-label">Very heavy</span>
+            <span class="dbz-range">55–65</span>
+          </div>
+          <div class="dbz-row">
+            <div class="dbz-swatch" style="background:#ff00ff"></div>
+            <span class="dbz-label">Extreme / Hail</span>
+            <span class="dbz-range">65+</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Data Sources health -->
+      <div class="sidebar-section">
+        <div class="sidebar-label">Data Sources</div>
+        <div class="source-list" id="sourceHealthList">
+          <div class="source-item">
+            <div class="source-dot unknown"></div>
+            <span class="source-name">Loading…</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- About -->
+      <div class="sidebar-section" style="margin-top:auto">
+        <div class="sidebar-label">About</div>
+        <p class="about-text">
+          RadrView is a free, open-source weather radar viewer backed by
+          real-time MRMS composite reflectivity data.
+          Licensed under the <a href="/LICENSE" target="_blank">MIT License</a>.
+        </p>
+      </div>
+
+    </aside>
+  </div>
+
+  <!-- Map legend -->
+  <div class="map-legend" id="mapLegend">
+    <div class="map-legend-label">Reflectivity (dBZ)</div>
+    <div class="map-legend-bar" id="legendBar"></div>
+    <div class="map-legend-ticks">
+      <span>5</span>
+      <span>25</span>
+      <span>45</span>
+      <span>65+</span>
+    </div>
+  </div>
+
+  <!-- Timeline Bar -->
+  <div class="timeline-bar">
+    <div class="timeline-controls">
+      <button class="tl-btn" id="btnPrev" title="Previous frame">
+        <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="9,2 4,7 9,12"/>
+        </svg>
+      </button>
+      <button class="tl-btn" id="btnPlay" title="Play / Pause">
+        <!-- Play icon, toggled by JS -->
+        <svg id="iconPlay" viewBox="0 0 14 14" fill="currentColor">
+          <polygon points="3,1 13,7 3,13"/>
+        </svg>
+        <svg id="iconPause" viewBox="0 0 14 14" fill="currentColor" style="display:none">
+          <rect x="2" y="1" width="4" height="12" rx="1"/>
+          <rect x="8" y="1" width="4" height="12" rx="1"/>
+        </svg>
+      </button>
+      <button class="tl-btn" id="btnNext" title="Next frame">
+        <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="5,2 10,7 5,12"/>
+        </svg>
+      </button>
+    </div>
+
+    <div class="timeline-track-wrapper">
+      <div class="timeline-track" id="timelineTrack">
+        <div class="timeline-frames" id="timelineFrames"></div>
+      </div>
+      <div class="timeline-timestamps" id="timelineTimestamps"></div>
+    </div>
+
+    <div class="tl-timestamp" id="currentTimestamp">Loading…</div>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
+    'use strict';
+
     const API = window.location.origin;
-    let radarLayer = null;
+
+    // ── State ──
     let currentFrame = null;
     let frames = [];
+    let frameIdx = -1;
     let playing = false;
     let playInterval = null;
     let liveMode = true;
 
-    // Mobile panel toggle
-    const panel = document.getElementById('panel');
-    document.getElementById('panel-handle').addEventListener('click', () => {
-      panel.classList.toggle('open');
-    });
-
+    // ── Helpers ──
     function formatAge(seconds) {
+      if (seconds < 0) return 'unknown';
       if (seconds < 60) return seconds + 's';
       if (seconds < 3600) return Math.floor(seconds / 60) + 'm ' + (seconds % 60) + 's';
       if (seconds < 86400) return Math.floor(seconds / 3600) + 'h ' + Math.floor((seconds % 3600) / 60) + 'm';
       return Math.floor(seconds / 86400) + 'd ' + Math.floor((seconds % 86400) / 3600) + 'h';
     }
 
-    const map = L.map('map', { zoomControl: false }).setView([42, -95], 5);
-    L.control.zoom({ position: 'bottomleft' }).addTo(map);
+    function formatFrameTime(ts) {
+      // ts = YYYYMMDDHHmm (12 chars)
+      if (!ts || ts.length < 12) return ts || '--';
+      const month = ts.slice(4, 6);
+      const day   = ts.slice(6, 8);
+      const hour  = ts.slice(8, 10);
+      const min   = ts.slice(10, 12);
+      return month + '/' + day + ' ' + hour + ':' + min + 'Z';
+    }
 
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    // ── Map ──
+    const map = L.map('map', { zoomControl: false }).setView([42, -95], 5);
+    L.control.zoom({ position: 'topleft' }).addTo(map);
+
+    // Dark base layer (no labels)
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
       attribution: '&copy; OSM &copy; CARTO',
       subdomains: 'abcd',
       maxZoom: 19,
     }).addTo(map);
 
-    async function loadPalettes() {
-      const res = await fetch(`${API}/palettes`);
-      const data = await res.json();
-      const sel = document.getElementById('palette');
-      data.palettes.forEach(p => {
-        const opt = document.createElement('option');
-        opt.value = p.name;
-        opt.textContent = p.name.charAt(0).toUpperCase() + p.name.slice(1);
-        if (p.name === 'dark') opt.selected = true;
-        sel.appendChild(opt);
+    // RadrView radar layer will be inserted here (between base and labels)
+    // Labels layer on top
+    const labelsLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', {
+      attribution: '',
+      subdomains: 'abcd',
+      maxZoom: 19,
+      pane: 'overlayPane',
+    });
+    labelsLayer.addTo(map);
+
+    // Build map legend bar from dBZ colors
+    (function buildLegendBar() {
+      const colors = ['#07a309','#01c501','#fcee00','#f4b800','#f40000','#bc0000','#ff00ff'];
+      const bar = document.getElementById('legendBar');
+      colors.forEach(c => {
+        const seg = document.createElement('div');
+        seg.style.cssText = 'flex:1;background:' + c + ';height:100%';
+        bar.appendChild(seg);
       });
-      updateLegend();
-    }
+    })();
 
-    function updateLegend() {
-      document.getElementById('legend').src = `${API}/palette/${document.getElementById('palette').value}/legend`;
-    }
-
-    // Dual-layer preload + crossfade
+    // ── Dual-layer preload + crossfade ──
     let frontLayer = null;
     let backLayer = null;
     let preloadedFrame = null;
@@ -367,6 +839,7 @@
         minZoom: 2,
         tileSize: 256,
         attribution: 'RadrView',
+        zIndex: 200,
       });
     }
 
@@ -382,7 +855,6 @@
         backLayer = null;
         preloadedFrame = null;
         frontLayer = newFront;
-        radarLayer = newFront;
 
         const startTime = performance.now();
         function animate(now) {
@@ -406,7 +878,6 @@
       newLayer.addTo(map);
       if (frontLayer) map.removeLayer(frontLayer);
       frontLayer = newLayer;
-      radarLayer = newLayer;
     }
 
     function preloadFrame(timestamp) {
@@ -417,6 +888,51 @@
       preloadedFrame = timestamp;
     }
 
+    // ── Palettes ──
+    async function loadPalettes() {
+      try {
+        const res = await fetch(`${API}/palettes`);
+        const data = await res.json();
+        const sel = document.getElementById('palette');
+        data.palettes.forEach(p => {
+          const opt = document.createElement('option');
+          opt.value = p.name;
+          opt.textContent = p.name.charAt(0).toUpperCase() + p.name.slice(1);
+          if (p.name === 'dark') opt.selected = true;
+          sel.appendChild(opt);
+        });
+      } catch (e) { /* server may not be running in dev */ }
+    }
+
+    // ── Sources ──
+    async function loadSources() {
+      try {
+        const res = await fetch(`${API}/sources`);
+        const data = await res.json();
+        const sel = document.getElementById('source');
+        data.sources.forEach(s => {
+          if (s.name === 'composite') return;
+          const opt = document.createElement('option');
+          opt.value = s.name;
+          opt.textContent = s.description || s.name;
+          sel.appendChild(opt);
+        });
+      } catch (e) { /* server may not be running in dev */ }
+    }
+
+    // ── Frames ──
+    async function loadFrames() {
+      const source = document.getElementById('source').value;
+      try {
+        const res = await fetch(`${API}/frames?source=${source}&limit=720`);
+        const data = await res.json();
+        frames = data.frames || [];
+        frameIdx = frames.length - 1;
+        buildTimeline();
+        if (liveMode && frames.length > 0) updateActiveFrame(frameIdx);
+      } catch (e) { /* server may not be running */ }
+    }
+
     async function fetchLatestFrame() {
       const source = document.getElementById('source').value;
       try {
@@ -425,119 +941,227 @@
         const data = await res.json();
         const changed = currentFrame !== data.timestamp;
         currentFrame = data.timestamp;
-        document.getElementById('frame-ts').textContent = data.timestamp.slice(8,10)+':'+data.timestamp.slice(10,12);
-        document.getElementById('frame-age').textContent = formatAge(data.age);
-        fetch(`${API}/frames?source=${source}&limit=1000`).then(r=>r.json()).then(d=>{
-          document.getElementById('tile-count').textContent = d.count + ' frames';
-        }).catch(()=>{});
-        if (changed) addRadarLayer();
-      } catch (e) {
-        document.getElementById('frame-ts').textContent = 'err';
-      }
-    }
-
-    document.getElementById('palette').addEventListener('change', () => { updateLegend(); addRadarLayer(); });
-    document.getElementById('source').addEventListener('change', () => { stopPlayback(); liveMode = true; fetchLatestFrame(); loadFrames(); });
-    document.getElementById('opacity').addEventListener('input', () => {
-      if (radarLayer) radarLayer.setOpacity(document.getElementById('opacity').value / 100);
-    });
-
-    // WebSocket
-    const liveDot = document.getElementById('live-dot');
-    function connectWebSocket() {
-      const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const ws = new WebSocket(`${wsProto}//${location.host}/ws`);
-      ws.onopen = () => { liveDot.classList.add('connected'); liveDot.title = 'connected'; };
-      ws.onmessage = (event) => {
-        const msg = JSON.parse(event.data);
-        if (msg.type === 'new-frame' && liveMode) {
-          currentFrame = msg.timestamp;
-          document.getElementById('frame-ts').textContent = msg.timestamp.slice(8,10)+':'+msg.timestamp.slice(10,12);
-          document.getElementById('frame-age').textContent = formatAge(0);
+        document.getElementById('updateTime').textContent = formatAge(data.age) + ' ago';
+        document.getElementById('currentTimestamp').textContent = formatFrameTime(data.timestamp);
+        if (changed && liveMode) {
           addRadarLayer();
           loadFrames();
         }
-      };
-      ws.onclose = () => { liveDot.classList.remove('connected'); liveDot.title = 'disconnected'; setTimeout(connectWebSocket, 5000); };
-      ws.onerror = () => ws.close();
-    }
-
-    // Sources
-    async function loadSources() {
-      const res = await fetch(`${API}/sources`);
-      const data = await res.json();
-      const sel = document.getElementById('source');
-      data.sources.forEach(s => {
-        if (s.name === 'composite') return;
-        const opt = document.createElement('option');
-        opt.value = s.name;
-        opt.textContent = s.description || s.name;
-        sel.appendChild(opt);
-      });
-    }
-
-    // Animation
-    async function loadFrames() {
-      const source = document.getElementById('source').value;
-      const res = await fetch(`${API}/frames?source=${source}&limit=720`);
-      const data = await res.json();
-      frames = data.frames;
-      const tl = document.getElementById('timeline');
-      tl.max = Math.max(0, frames.length - 1);
-      tl.value = frames.length - 1;
-      if (frames.length > 0) {
-        document.getElementById('timeline-start').textContent = formatFrameTime(frames[0].timestamp);
-        document.getElementById('timeline-end').textContent = formatFrameTime(frames[frames.length - 1].timestamp);
+      } catch (e) {
+        document.getElementById('updateTime').textContent = '--';
       }
     }
 
-    function formatFrameTime(ts) { return ts.slice(8,10) + ':' + ts.slice(10,12); }
+    // ── Timeline rendering ──
+    function buildTimeline() {
+      const framesEl = document.getElementById('timelineFrames');
+      const tsEl = document.getElementById('timelineTimestamps');
+      framesEl.innerHTML = '';
+      tsEl.innerHTML = '';
 
-    document.getElementById('play-btn').addEventListener('click', () => { playing ? stopPlayback() : startPlayback(); });
-    document.getElementById('play-btn').addEventListener('dblclick', () => { stopPlayback(); liveMode = true; document.getElementById('timeline').value = frames.length - 1; fetchLatestFrame(); });
+      frames.forEach((f, i) => {
+        const div = document.createElement('div');
+        div.className = 'tl-frame' + (i === frameIdx ? ' active' : '');
+        div.title = formatFrameTime(f.timestamp);
+        div.addEventListener('click', () => {
+          liveMode = false;
+          stopPlayback();
+          updateActiveFrame(i);
+        });
+        framesEl.appendChild(div);
+      });
 
+      // Show ~4 timestamps evenly distributed
+      if (frames.length > 0) {
+        const positions = [0, Math.floor(frames.length / 3), Math.floor(2 * frames.length / 3), frames.length - 1];
+        const unique = [...new Set(positions)];
+        unique.forEach(idx => {
+          const sp = document.createElement('span');
+          sp.textContent = formatFrameTime(frames[idx].timestamp).slice(-5); // HH:mmZ
+          tsEl.appendChild(sp);
+        });
+      }
+    }
+
+    function setActiveTimelineFrame(idx) {
+      const children = document.getElementById('timelineFrames').children;
+      for (let i = 0; i < children.length; i++) {
+        children[i].classList.toggle('active', i === idx);
+      }
+    }
+
+    function updateActiveFrame(idx) {
+      if (idx < 0 || idx >= frames.length) return;
+      frameIdx = idx;
+      const frame = frames[idx];
+      currentFrame = frame.timestamp;
+      document.getElementById('currentTimestamp').textContent = formatFrameTime(frame.timestamp);
+      document.getElementById('updateTime').textContent = formatAge(Math.floor((Date.now() - frame.epochMs) / 1000)) + ' ago';
+      setActiveTimelineFrame(idx);
+      addRadarLayer();
+    }
+
+    // ── Playback ──
     function startPlayback() {
-      playing = true; liveMode = false;
-      document.getElementById('play-btn').textContent = '\u23F8';
-      const speed = parseInt(document.getElementById('play-speed').value);
-      const tl = document.getElementById('timeline');
-      const nextIdx = (parseInt(tl.value) + 1) % frames.length;
-      if (frames[nextIdx]) preloadFrame(frames[nextIdx].timestamp);
+      playing = true;
+      liveMode = false;
+      document.getElementById('iconPlay').style.display = 'none';
+      document.getElementById('iconPause').style.display = '';
+      const peekIdx = (frameIdx + 1) % frames.length;
+      if (frames[peekIdx]) preloadFrame(frames[peekIdx].timestamp);
       playInterval = setInterval(() => {
-        let idx = parseInt(tl.value) + 1;
-        if (idx >= frames.length) idx = 0;
-        tl.value = idx;
-        showFrame(idx);
-        const peekIdx = (idx + 1) % frames.length;
-        if (frames[peekIdx]) preloadFrame(frames[peekIdx].timestamp);
-      }, speed);
+        let next = frameIdx + 1;
+        if (next >= frames.length) next = 0;
+        updateActiveFrame(next);
+        const peek = (next + 1) % frames.length;
+        if (frames[peek]) preloadFrame(frames[peek].timestamp);
+      }, 800);
     }
 
     function stopPlayback() {
       playing = false;
-      document.getElementById('play-btn').textContent = '\u25B6';
+      document.getElementById('iconPlay').style.display = '';
+      document.getElementById('iconPause').style.display = 'none';
       if (playInterval) { clearInterval(playInterval); playInterval = null; }
     }
 
-    document.getElementById('timeline').addEventListener('input', (e) => { liveMode = false; stopPlayback(); showFrame(parseInt(e.target.value)); });
+    document.getElementById('btnPlay').addEventListener('click', () => {
+      playing ? stopPlayback() : startPlayback();
+    });
 
-    function showFrame(idx) {
-      if (idx < 0 || idx >= frames.length) return;
-      const frame = frames[idx];
-      currentFrame = frame.timestamp;
-      document.getElementById('frame-ts').textContent = formatFrameTime(frame.timestamp);
-      document.getElementById('frame-time').textContent = formatFrameTime(frame.timestamp);
-      document.getElementById('frame-age').textContent = formatAge(Math.floor((Date.now() - frame.epochMs) / 1000));
-      addRadarLayer();
+    document.getElementById('btnPrev').addEventListener('click', () => {
+      stopPlayback();
+      liveMode = false;
+      updateActiveFrame(Math.max(0, frameIdx - 1));
+    });
+
+    document.getElementById('btnNext').addEventListener('click', () => {
+      stopPlayback();
+      liveMode = false;
+      updateActiveFrame(Math.min(frames.length - 1, frameIdx + 1));
+    });
+
+    // ── Controls ──
+    document.getElementById('palette').addEventListener('change', () => { addRadarLayer(); });
+    document.getElementById('source').addEventListener('change', () => {
+      stopPlayback();
+      liveMode = true;
+      fetchLatestFrame();
+      loadFrames();
+    });
+    document.getElementById('opacity').addEventListener('input', (e) => {
+      document.getElementById('opacityVal').textContent = e.target.value + '%';
+      if (frontLayer) frontLayer.setOpacity(e.target.value / 100);
+    });
+
+    // ── WebSocket ──
+    const liveDot = document.getElementById('live-dot');
+    function connectWebSocket() {
+      const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const ws = new WebSocket(`${wsProto}//${location.host}/ws`);
+      ws.onopen = () => {
+        liveDot.classList.add('connected');
+        liveDot.title = 'Connected';
+      };
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'new-frame' && liveMode) {
+            currentFrame = msg.timestamp;
+            document.getElementById('currentTimestamp').textContent = formatFrameTime(msg.timestamp);
+            document.getElementById('updateTime').textContent = '0s ago';
+            addRadarLayer();
+            loadFrames();
+          }
+        } catch (e) { /* ignore parse errors */ }
+      };
+      ws.onclose = () => {
+        liveDot.classList.remove('connected');
+        liveDot.title = 'Disconnected';
+        setTimeout(connectWebSocket, 5000);
+      };
+      ws.onerror = () => ws.close();
     }
 
-    // Init
+    // ── Health polling ──
+    async function updateHealth() {
+      try {
+        const res = await fetch(`${API}/health`);
+        const data = await res.json();
+        const list = document.getElementById('sourceHealthList');
+        list.innerHTML = '';
+        Object.entries(data.sources || {}).forEach(([name, info]) => {
+          const item = document.createElement('div');
+          item.className = 'source-item';
+          const ageStr = info.ageSeconds >= 0 ? formatAge(info.ageSeconds) : 'no data';
+          item.innerHTML = `
+            <div class="source-dot ${info.status}"></div>
+            <span class="source-name">${name}</span>
+            <span class="source-age">${ageStr}</span>
+          `;
+          list.appendChild(item);
+        });
+      } catch (e) { /* server may be unreachable */ }
+    }
+
+    // ── Location Search (Open-Meteo geocoding) ──
+    let searchTimer = null;
+    const searchInput = document.getElementById('searchInput');
+    const searchResults = document.getElementById('searchResults');
+
+    searchInput.addEventListener('input', () => {
+      clearTimeout(searchTimer);
+      const q = searchInput.value.trim();
+      if (q.length < 2) { searchResults.style.display = 'none'; return; }
+      searchTimer = setTimeout(() => doSearch(q), 350);
+    });
+
+    searchInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        searchResults.style.display = 'none';
+        searchInput.blur();
+      }
+    });
+
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('.topbar-search')) searchResults.style.display = 'none';
+    });
+
+    async function doSearch(q) {
+      try {
+        const res = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=5&language=en&format=json`);
+        const data = await res.json();
+        const results = data.results || [];
+        searchResults.innerHTML = '';
+        if (results.length === 0) {
+          searchResults.style.display = 'none';
+          return;
+        }
+        results.forEach(r => {
+          const item = document.createElement('div');
+          item.className = 'search-result-item';
+          const label = [r.name, r.admin1, r.country].filter(Boolean).join(', ');
+          item.textContent = label;
+          item.addEventListener('click', () => {
+            searchResults.style.display = 'none';
+            searchInput.value = label;
+            map.flyTo([r.latitude, r.longitude], 8, { duration: 1 });
+          });
+          searchResults.appendChild(item);
+        });
+        searchResults.style.display = 'block';
+      } catch (e) { /* geocoding failed silently */ }
+    }
+
+    // ── Init ──
     loadSources();
     loadPalettes();
     fetchLatestFrame();
     loadFrames();
     connectWebSocket();
+    updateHealth();
     setInterval(fetchLatestFrame, 60000);
+    setInterval(updateHealth, 30000);
   </script>
 </body>
 </html>
