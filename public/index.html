@@ -10,7 +10,7 @@
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #1a1a2e; overflow: hidden; }
-    #map { width: 100vw; height: calc(100vh - 42px); margin-top: 42px; }
+    #map { width: 100vw; height: calc(100vh - 48px); margin-top: 48px; }
 
     /* Panel — desktop: top-right card, mobile: bottom sheet */
     .panel {
@@ -29,7 +29,7 @@
     /* Desktop layout */
     @media (min-width: 641px) {
       .panel {
-        top: 54px; right: 12px;
+        top: 60px; right: 12px;
         border-radius: 12px;
         padding: 14px 16px;
         min-width: 220px;
@@ -164,59 +164,59 @@
       color: #555;
       margin-top: 2px;
     }
-    /* Top navbar */
+    /* Top navbar — matches landing page */
     .navbar {
-      position: absolute;
+      position: fixed;
       top: 0; left: 0; right: 0;
       z-index: 1001;
-      height: 42px;
+      height: 48px;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 0 12px;
-      background: rgba(16, 16, 30, 0.88);
+      padding: 0 20px;
+      background: rgba(10, 10, 24, 0.92);
       backdrop-filter: blur(10px);
       -webkit-backdrop-filter: blur(10px);
       border-bottom: 1px solid rgba(255,255,255,0.06);
     }
     .navbar-brand {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      color: #fff;
-      font-size: 15px;
+      font-size: 16px;
       font-weight: 700;
+      color: #fff;
       letter-spacing: 0.5px;
       text-decoration: none;
     }
+    .navbar-brand .accent { color: #44aaee; }
     .navbar-brand .dot {
+      display: inline-block;
       width: 8px; height: 8px;
       border-radius: 50%;
       background: #f44;
+      margin-right: 6px;
     }
     .navbar-brand .dot.connected { background: #4f4; animation: pulse 2s infinite; }
     @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
     .navbar-links {
       display: flex;
       align-items: center;
-      gap: 4px;
+      gap: 6px;
     }
     .navbar-links a {
       display: flex;
       align-items: center;
       gap: 5px;
-      padding: 5px 10px;
-      border-radius: 6px;
-      font-size: 12px;
+      color: #888;
       text-decoration: none;
-      color: #999;
+      font-size: 13px;
+      padding: 6px 12px;
+      border-radius: 6px;
       transition: color 0.15s, background 0.15s;
     }
-    .navbar-links a:hover { color: #fff; background: rgba(255,255,255,0.08); }
+    .navbar-links a:hover { color: #fff; background: rgba(255,255,255,0.06); }
     .navbar-links svg { width: 16px; height: 16px; fill: currentColor; }
     @media (max-width: 640px) {
-      .navbar-links span { display: none; }
-      .navbar-links a { padding: 6px; }
+      .navbar-links a span { display: none; }
+      .navbar-links a { padding: 6px 8px; }
     }
   </style>
 </head>
@@ -224,12 +224,12 @@
   <nav class="navbar">
     <a href="/" class="navbar-brand">
       <span class="dot" id="live-dot" title="disconnected"></span>
-      RadrView
+      Radr<span class="accent">View</span>
     </a>
     <div class="navbar-links">
-      <a href="/docs">Docs</a>
+      <a href="/docs"><span>Docs</span></a>
       <a href="https://github.com/cwdaniel/radrview" target="_blank" rel="noopener">
-        <svg viewBox="0 0 16 16" style="width:16px;height:16px;fill:currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+        <svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
         <span>GitHub</span>
       </a>
     </div>
