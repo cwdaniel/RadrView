@@ -71,7 +71,7 @@ export class MBTileStore implements TileStore {
     mkdirSync(path.dirname(dbFile), { recursive: true });
 
     const db = new Database(dbFile);
-    db.pragma('journal_mode = WAL');
+    db.pragma('journal_mode = DELETE'); // Write-once, read-many — no WAL/SHM files left behind
     db.pragma('synchronous = NORMAL');
     db.exec(INIT_SQL);
 
