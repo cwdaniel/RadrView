@@ -8,6 +8,9 @@ import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('palette');
 
+// Track unknown PrecipFlag codes to log once per code, not per pixel
+const warnedCodes = new Set<number>();
+
 export interface PaletteStop {
   dbz: number;
   color: [number, number, number, number]; // RGBA
@@ -200,14 +203,21 @@ export async function colorizePrecipType(
       continue;
     }
 
-    const typeLut = lutMap.get(typeCode);
+    // Fall back to rain (code 1) for unknown non-zero type codes —
+    // any non-zero code means precipitation is present
+    const typeLut = lutMap.get(typeCode) ?? (typeCode !== 0 ? lutMap.get(1) : undefined);
     if (!typeLut) {
-      // Unknown type code — transparent
       rgba[i * 4 + 0] = 0;
       rgba[i * 4 + 1] = 0;
       rgba[i * 4 + 2] = 0;
       rgba[i * 4 + 3] = 0;
       continue;
+    }
+
+    // Log unknown codes once per code (not per pixel)
+    if (!lutMap.has(typeCode) && typeCode !== 0 && !warnedCodes.has(typeCode)) {
+      warnedCodes.add(typeCode);
+      logger.warn({ typeCode }, 'Unknown PrecipFlag code, falling back to rain palette');
     }
 
     const offset = dbzPixel * 4;
