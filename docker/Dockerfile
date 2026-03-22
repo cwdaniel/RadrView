@@ -5,6 +5,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gdal-bin \
     wget \
     ca-certificates \
+    python3 \
+    g++ \
+    make \
     && rm -rf /var/lib/apt/lists/*
 
 # Set GDAL environment
@@ -18,7 +21,10 @@ RUN corepack enable && corepack prepare pnpm@latest --activate
 
 # Install dependencies
 COPY package.json pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile
+COPY .npmrc ./
+RUN pnpm install --frozen-lockfile \
+    && cd /app/node_modules/.pnpm/better-sqlite3@*/node_modules/better-sqlite3 \
+    && npx --yes node-gyp rebuild
 
 # Copy source and build
 COPY tsconfig.json ./
