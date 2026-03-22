@@ -42,7 +42,11 @@ export function createApp(redis: Redis): { app: ReturnType<typeof express> } {
   const palettesDir = path.join(process.cwd(), 'palettes');
   loadPalettes(palettesDir);
 
-  // Serve static viewer
+  // Serve landing page at /landing
+  const landingDir = path.join(process.cwd(), 'landing');
+  app.use('/landing', express.static(landingDir));
+
+  // Serve static viewer at root
   const publicDir = path.join(process.cwd(), 'public');
   app.use(express.static(publicDir));
 

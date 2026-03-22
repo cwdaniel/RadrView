@@ -31,6 +31,7 @@ COPY tsconfig.json ./
 COPY src/ ./src/
 COPY palettes/ ./palettes/
 COPY public/ ./public/
+COPY landing/ ./landing/
 RUN pnpm build
 
 CMD ["node", "dist/server/index.js"]
