@@ -69,7 +69,7 @@ export const SOURCES: Record<string, SourceConfig> = {
     bounds: { west: 1.4, south: 45.6, east: 18.8, north: 56.3 },
     priority: 10,
     pollIntervalMs: 60_000,
-    product: 'rv',
+    product: 'hx',
     region: 'eu',
   },
 
