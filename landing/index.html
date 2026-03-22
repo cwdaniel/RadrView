@@ -692,7 +692,12 @@
     const map = L.map('map', {
       zoomControl: false,
       attributionControl: true,
+      scrollWheelZoom: false,
     }).setView([42, -88], 5);
+
+    // Enable scroll zoom only when map is clicked/focused
+    map.getContainer().addEventListener('click', () => map.scrollWheelZoom.enable());
+    document.addEventListener('scroll', () => map.scrollWheelZoom.disable());
 
     L.control.zoom({ position: 'bottomright' }).addTo(map);
 
