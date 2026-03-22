@@ -4,4 +4,10 @@ data/
 *.tif
 *.grib2
 *.grib2.gz
+*.mbtiles
+*.mbtiles-wal
+*.mbtiles-shm
 .env
+.claude/
+tools/realesrgan/
+tools/*.zip
