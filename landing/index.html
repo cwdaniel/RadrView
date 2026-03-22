@@ -47,7 +47,9 @@
     #map {
       width: 100%;
       height: 100%;
+      background: #0d0d1a;
     }
+    .leaflet-container { background: #0d0d1a !important; }
 
     /* Leaflet dark tiles attribution fix */
     .leaflet-control-attribution {
@@ -109,6 +111,7 @@
     }
 
     .hero-controls select:focus { outline: none; border-color: rgba(68, 170, 238, 0.4); }
+    .hero-controls select option { background: #111122; color: #e0e0e0; }
 
     .hero-controls label {
       display: block;
@@ -472,6 +475,11 @@
     <div id="hero-panel">
       <h1>Radr<span class="accent">View</span></h1>
       <p>Open-source real-time weather radar tiles</p>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <a href="/docs" style="color:var(--accent);font-size:12px;text-decoration:none;padding:4px 10px;border:1px solid var(--border);border-radius:4px">Docs</a>
+        <a href="https://github.com/cwdaniel/radrview" target="_blank" rel="noopener" style="color:#999;font-size:12px;text-decoration:none;padding:4px 10px;border:1px solid var(--border);border-radius:4px">GitHub</a>
+        <a href="/app" style="color:#999;font-size:12px;text-decoration:none;padding:4px 10px;border:1px solid var(--border);border-radius:4px">Open App</a>
+      </div>
 
       <div class="hero-controls">
         <div>
@@ -643,7 +651,7 @@
       </div>
 
       <div class="cta-group">
-        <a href="https://radrview.com/docs" class="btn btn-primary">
+        <a href="/docs" class="btn btn-primary">
           Documentation
         </a>
         <a href="https://github.com/cwdaniel/radrview" class="btn btn-secondary" target="_blank" rel="noopener">
@@ -669,7 +677,7 @@
       </div>
       <div class="footer-links">
         <a href="https://github.com/cwdaniel/radrview" target="_blank" rel="noopener">GitHub</a>
-        <a href="https://radrview.com/docs">Documentation</a>
+        <a href="/docs">Documentation</a>
         <a href="http://localhost:8600">Live Demo</a>
       </div>
     </div>

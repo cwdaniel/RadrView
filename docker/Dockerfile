@@ -32,6 +32,7 @@ COPY src/ ./src/
 COPY palettes/ ./palettes/
 COPY public/ ./public/
 COPY landing/ ./landing/
+COPY docs/ ./docs/
 RUN pnpm build
 
 CMD ["node", "dist/server/index.js"]
