@@ -20,7 +20,7 @@ Self-hosted, real-time weather radar tile service. Ingests raw radar data from n
 ## Quick Start
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/RadrView.git
+git clone https://github.com/cwdaniel/radrview.git
 cd RadrView
 docker compose -f docker/docker-compose.yml up -d
 ```
