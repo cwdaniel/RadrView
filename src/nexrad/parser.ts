@@ -69,9 +69,15 @@ function extractVcp(radar: Level2Radar): number {
   return patternNumber ?? 0;
 }
 
+/** Minimum correlation coefficient to consider a gate as weather (not clutter/ground/bio) */
+const RHOHV_THRESHOLD = 0.9;
+
 /**
  * Build a single RadialGate from a scan index at the current elevation.
  * Returns null if reflectivity data is missing for this scan.
+ *
+ * Gates with RhoHV < 0.9 are masked as NaN to filter out ground clutter,
+ * anomalous propagation, biological targets (birds/insects), and wind farms.
  */
 function buildRadial(radar: Level2Radar, scanIndex: number): RadialGate | null {
   let reflData;
@@ -87,15 +93,38 @@ function buildRadial(radar: Level2Radar, scanIndex: number): RadialGate | null {
 
   const { gate_count, first_gate, gate_size, moment_data } = reflData;
 
+  // Try to get correlation coefficient (RhoHV) for clutter filtering
+  let rhoData: (number | null)[] | null = null;
+  try {
+    const rho = radar.getHighresCorrelationCoefficient(scanIndex);
+    if (rho?.moment_data) rhoData = rho.moment_data;
+  } catch {
+    // RhoHV not available — proceed without filtering
+  }
+
   // Convert km → meters
   const firstGateRange = first_gate * 1000;
   const gateSpacing = gate_size * 1000;
 
-  // Build Float32Array: null → NaN
+  // Build Float32Array: null → NaN, apply RhoHV filter
   const values = new Float32Array(gate_count);
   for (let i = 0; i < gate_count; i++) {
     const v = moment_data[i];
-    values[i] = v === null || v === undefined ? NaN : v;
+    if (v === null || v === undefined) {
+      values[i] = NaN;
+      continue;
+    }
+
+    // Filter by RhoHV if available — low RhoHV = non-meteorological target
+    if (rhoData) {
+      const rho = rhoData[i];
+      if (rho === null || rho === undefined || rho < RHOHV_THRESHOLD) {
+        values[i] = NaN;
+        continue;
+      }
+    }
+
+    values[i] = v;
   }
 
   return {

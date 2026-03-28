@@ -215,6 +215,12 @@ declare module 'nexrad-level-2-data' {
     getHighresVelocity(scan: number): HighResData;
 
     /**
+     * Return high-resolution correlation coefficient (RhoHV) data.
+     */
+    getHighresCorrelationCoefficient(): HighResData[];
+    getHighresCorrelationCoefficient(scan: number): HighResData;
+
+    /**
      * Combine multiple Level2Radar objects into one.
      * Typically used to merge chunk files from a single volume scan.
      * Takes Level2Radar instances — NOT raw Buffers.
