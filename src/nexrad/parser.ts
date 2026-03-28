@@ -72,10 +72,10 @@ function extractVcp(radar: Level2Radar): number {
 /** Minimum correlation coefficient to consider a gate as weather (not clutter/ground/bio) */
 const RHOHV_THRESHOLD = 0.9;
 
-/** Minimum dBZ to display — filters out biological returns, ground clutter, and noise.
- *  Real rain is typically 15+ dBZ. Light drizzle ~10 dBZ. Below 5 dBZ is almost always
- *  non-meteorological (birds, insects, AP, clear-air returns). */
-const MIN_DBZ_THRESHOLD = 5;
+/** Minimum dBZ to display. Combined with RhoHV filtering, this removes residual noise.
+ *  Light rain/snow starts ~5 dBZ, drizzle ~0 dBZ. With RhoHV >= 0.9 already filtering
+ *  biological/clutter, we can keep the threshold low to show light precipitation. */
+const MIN_DBZ_THRESHOLD = 0;
 
 /**
  * Build a RhoHV lookup array aligned to reflectivity gates.

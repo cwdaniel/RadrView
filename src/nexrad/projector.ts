@@ -235,12 +235,19 @@ export function renderTile(
   const pixelWidthM = tileWidthM / TILE_SIZE;
   // const pixelHeightM = tileHeightM / TILE_SIZE;  // square pixels in Mercator
 
-  // Search radius in pixels — scale to account for gate spacing vs pixel size.
-  // NEXRAD super-res gate spacing is 250 m; at high zoom a pixel << 250 m.
-  // We want the radius to be at least 1.5 px (for dense low-zoom data) and
-  // grow as pixels become sub-gate-spacing at high zoom.
-  const searchRadiusPx = Math.max(1.5, (250 / pixelWidthM) * 0.75);
-  const searchRadiusM = searchRadiusPx * pixelWidthM;
+  // Search radius — must account for BOTH gate spacing (250m in range direction)
+  // AND azimuthal spacing (up to ~4km at far range).
+  //
+  // NEXRAD super-res: 0.5° azimuth, 250m gates, 460km max range.
+  // At 460km range, adjacent radials are: 460000 * sin(0.5° * π/180) ≈ 4015m apart.
+  // At 230km range: ~2008m. At 100km: ~873m.
+  //
+  // We use 2500m as a reasonable search radius — covers azimuthal gaps at
+  // typical ranges while not over-smearing close-range data. This is roughly
+  // half the max azimuthal gap, meaning adjacent radials overlap.
+  const SEARCH_RADIUS_M = 2500;
+  const searchRadiusPx = Math.max(2, SEARCH_RADIUS_M / pixelWidthM);
+  const searchRadiusM = SEARCH_RADIUS_M;
 
   // Padded tile bounds for point collection (pad by search radius)
   const padM = searchRadiusM;
