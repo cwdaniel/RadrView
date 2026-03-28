@@ -1,4 +1,4 @@
-import { S3Client, ListObjectsV2Command, GetObjectCommand } from '@aws-sdk/client-s3';
+import { XMLParser } from 'fast-xml-parser';
 import { Redis } from 'ioredis';
 import { createLogger } from '../utils/logger.js';
 import { getAllStations, getStation } from './stations.js';
@@ -8,12 +8,8 @@ import { ScanStore } from './scan-store.js';
 
 const logger = createLogger('nexrad-ingester');
 
-const s3 = new S3Client({
-  region: 'us-east-1',
-  credentials: { accessKeyId: '', secretAccessKey: '' },  // anonymous public access
-});
-
-const BUCKET = 'noaa-nexrad-level2';
+// Use plain HTTPS against the public S3 bucket (no AWS SDK auth needed)
+const S3_BASE = 'https://noaa-nexrad-level2.s3.amazonaws.com';
 const POLL_INTERVAL_MS = 60_000;  // check every 60 seconds (archive updates every ~5 min)
 
 export class NexradIngester {
@@ -89,29 +85,34 @@ export class NexradIngester {
         stationId,
       ].join('/') + '/';
 
-      const resp = await s3.send(new ListObjectsV2Command({
-        Bucket: BUCKET,
-        Prefix: prefix,
-      }));
-
-      if (!resp.Contents || resp.Contents.length === 0) return false;
+      // List objects via S3 REST API (anonymous HTTPS — no AWS SDK needed)
+      const listUrl = `${S3_BASE}/?list-type=2&prefix=${encodeURIComponent(prefix)}`;
+      const listResp = await fetch(listUrl);
+      if (!listResp.ok) return false;
+      const xml = await listResp.text();
+      const parser = new XMLParser({ processEntities: false });
+      const parsed = parser.parse(xml);
+      const result = parsed?.ListBucketResult;
+      if (!result?.Contents) return false;
+      const contents: Array<{ Key: string }> = Array.isArray(result.Contents)
+        ? result.Contents
+        : [result.Contents];
 
       // Find latest V06 or V08 file
-      const sorted = resp.Contents
+      const sorted = contents
         .filter(o => o.Key && (o.Key.endsWith('_V06') || o.Key.endsWith('_V08')))
-        .sort((a, b) => a.Key!.localeCompare(b.Key!));
+        .sort((a, b) => a.Key.localeCompare(b.Key));
       const latest = sorted[sorted.length - 1];
       if (!latest?.Key) return false;
 
       // Skip if already processed
       if (this.latestKey.get(stationId) === latest.Key) return false;
 
-      // Download
-      const obj = await s3.send(new GetObjectCommand({
-        Bucket: BUCKET,
-        Key: latest.Key,
-      }));
-      const buf = Buffer.from(await obj.Body!.transformToByteArray());
+      // Download the file
+      const fileUrl = `${S3_BASE}/${latest.Key}`;
+      const fileResp = await fetch(fileUrl);
+      if (!fileResp.ok) return false;
+      const buf = Buffer.from(await fileResp.arrayBuffer());
 
       // Parse
       const scan = parseLevel2Reflectivity(buf);

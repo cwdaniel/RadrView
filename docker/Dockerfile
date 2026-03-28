@@ -30,6 +30,7 @@ RUN pnpm install --frozen-lockfile \
 COPY tsconfig.json ./
 COPY src/ ./src/
 COPY palettes/ ./palettes/
+COPY data/ ./data/
 COPY public/ ./public/
 COPY landing/ ./landing/
 COPY docs/ ./docs/
