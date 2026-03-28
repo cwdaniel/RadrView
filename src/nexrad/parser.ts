@@ -72,6 +72,11 @@ function extractVcp(radar: Level2Radar): number {
 /** Minimum correlation coefficient to consider a gate as weather (not clutter/ground/bio) */
 const RHOHV_THRESHOLD = 0.9;
 
+/** Minimum dBZ to display — filters out biological returns, ground clutter, and noise.
+ *  Real rain is typically 15+ dBZ. Light drizzle ~10 dBZ. Below 5 dBZ is almost always
+ *  non-meteorological (birds, insects, AP, clear-air returns). */
+const MIN_DBZ_THRESHOLD = 5;
+
 /**
  * Build a RhoHV lookup array aligned to reflectivity gates.
  *
@@ -139,6 +144,12 @@ function buildRadial(radar: Level2Radar, scanIndex: number): RadialGate | null {
   for (let i = 0; i < gate_count; i++) {
     const v = moment_data[i];
     if (v === null || v === undefined) {
+      values[i] = NaN;
+      continue;
+    }
+
+    // Filter weak returns — below 5 dBZ is almost always non-meteorological
+    if (v < MIN_DBZ_THRESHOLD) {
       values[i] = NaN;
       continue;
     }
