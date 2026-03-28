@@ -154,6 +154,23 @@ export class NexradIngester {
 
       if (!targetVolumeId || targetChunks.length === 0) return false;
 
+      // Check if the data is recent — reject scans older than 30 minutes
+      const startChunk = targetChunks.find(c => c.chunkType === 'S') || targetChunks[0];
+      const tsMatch = startChunk.timestamp.match(/^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})$/);
+      if (tsMatch) {
+        const chunkTime = Date.UTC(
+          parseInt(tsMatch[1]), parseInt(tsMatch[2]) - 1, parseInt(tsMatch[3]),
+          parseInt(tsMatch[4]), parseInt(tsMatch[5]), parseInt(tsMatch[6]),
+        );
+        const ageMs = Date.now() - chunkTime;
+        const MAX_AGE_MS = 30 * 60 * 1000;  // 30 minutes
+        if (ageMs > MAX_AGE_MS) {
+          // Stale data — skip and remove any previously cached scan
+          this.projectedScans.delete(stationId);
+          return false;
+        }
+      }
+
       // Skip if we already processed this volume
       if (this.latestVolume.get(stationId) === targetVolumeId) return false;
 
