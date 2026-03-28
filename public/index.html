@@ -609,6 +609,7 @@
         Live radar
       </span>
       <span id="updateTime">--</span>
+      <span id="data-source-indicator" style="font-family: var(--font-mono, monospace); font-size: 11px;">MRMS · 1km</span>
       <a href="/docs">Docs</a>
       <a href="https://github.com/cwdaniel/radrview" target="_blank" rel="noopener">GitHub</a>
     </div>
@@ -695,6 +696,15 @@
             <span class="source-name">Loading…</span>
           </div>
         </div>
+      </div>
+
+      <!-- Map Layers -->
+      <div class="sidebar-section">
+        <div class="sidebar-label">Map Layers</div>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-2);cursor:pointer;margin-top:8px;">
+          <input type="checkbox" id="show-stations" style="accent-color:var(--blue, #5b9bd5);">
+          Show radar stations
+        </label>
       </div>
 
       <!-- About -->
@@ -1153,6 +1163,49 @@
       } catch (e) { /* geocoding failed silently */ }
     }
 
+    // ── Data source indicator ──
+    map.on('zoomend', updateSourceIndicator);
+
+    function updateSourceIndicator() {
+      const z = map.getZoom();
+      const el = document.getElementById('data-source-indicator');
+      if (!el) return;
+      if (z >= 8) {
+        el.textContent = 'Level 2 · 250m';
+        el.style.color = 'var(--green, #3ddc84)';
+      } else {
+        el.textContent = 'MRMS · 1km';
+        el.style.color = 'var(--text-2, #8b90a0)';
+      }
+    }
+
+    // ── Station markers ──
+    const stationMarkers = L.layerGroup();
+
+    fetch('/nexrad/stations')
+      .then(r => r.json())
+      .then(stations => {
+        stations.forEach(s => {
+          L.circleMarker([s.lat, s.lon], {
+            radius: 3,
+            color: 'rgba(91,155,213,0.6)',
+            fillColor: 'rgba(91,155,213,0.3)',
+            fillOpacity: 0.5,
+            weight: 1,
+          }).bindTooltip(s.id + ' — ' + s.name, { direction: 'top', offset: [0, -5] })
+            .addTo(stationMarkers);
+        });
+      })
+      .catch(() => {});
+
+    document.getElementById('show-stations')?.addEventListener('change', function() {
+      if (this.checked) {
+        stationMarkers.addTo(map);
+      } else {
+        stationMarkers.remove();
+      }
+    });
+
     // ── Init ──
     loadSources();
     loadPalettes();
@@ -1160,6 +1213,7 @@
     loadFrames();
     connectWebSocket();
     updateHealth();
+    updateSourceIndicator();
     setInterval(fetchLatestFrame, 60000);
     setInterval(updateHealth, 30000);
   </script>
