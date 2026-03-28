@@ -1,376 +1,336 @@
 /**
  * NEXRAD Level 2 polar-to-Mercator tile projector.
  *
- * Two-phase design:
- *   1. projectScan() — runs once per scan update (~4.5 min). Projects all valid
- *      gate positions from polar coordinates to EPSG:3857 Mercator meters and
- *      stores them in compact typed arrays.
- *   2. renderTile() — runs per tile request. Uses a spatial grid for fast
- *      nearest-neighbor lookup into the pre-projected data.
+ * Uses INVERSE PROJECTION: for each output pixel, compute its azimuth and range
+ * relative to the radar station, then sample directly from the polar data.
+ * This produces gap-free, solid radar imagery by construction.
  *
- * Projection model:
- *   - 4/3 earth refraction model: slant range → ground range
- *   - Spherical trig: station lat/lon + azimuth + ground range → gate lat/lon
- *   - Standard Web Mercator (EPSG:3857): lat/lon → meters
+ * Two-phase design:
+ *   1. prepareScan() — runs once per scan update (~4.5 min). Sorts radials by
+ *      azimuth and pre-computes station Mercator position for fast tile rendering.
+ *   2. renderTile() — runs per tile request. For each pixel, inverse-projects to
+ *      polar coordinates and samples the nearest gate value.
  */
 
-import type { ScanData } from './parser.js';
+import type { ScanData, RadialGate } from './parser.js';
 import type { NexradStation } from './stations.js';
-import { EARTH_CIRCUMFERENCE, dbzToPixel, tileToMercatorBounds } from '../utils/geo.js';
+import { dbzToPixel, tileToMercatorBounds } from '../utils/geo.js';
 
 // WGS84 semi-major axis — MUST match EARTH_CIRCUMFERENCE = 2 * PI * R_EARTH
 const R_EARTH = 6378137;
-
-// Effective earth radius for the 4/3 refraction model
 const K_E = (4 / 3) * R_EARTH;
-
 const DEG = Math.PI / 180;
-
-// Tile output size
 const TILE_SIZE = 256;
 
-// Spatial grid resolution (grid cells per tile dimension)
-const GRID_SIZE = 64;  // 64x64 cells → each cell covers 4x4 pixels
+// ---------------------------------------------------------------------------
+// PreparedScan — pre-processed polar data for fast inverse-projection lookup
+// ---------------------------------------------------------------------------
 
-export interface ProjectedScan {
+export interface PreparedScan {
   stationId: string;
   timestamp: number;
-  /** Mercator X coordinates (EPSG:3857 meters), length = count */
-  mx: Float64Array;
-  /** Mercator Y coordinates (EPSG:3857 meters), length = count */
-  my: Float64Array;
-  /** Encoded pixel values [1–255], length = count */
-  pixels: Uint8Array;
-  /** Number of valid projected points */
-  count: number;
-  /** Mercator bounding box of all projected points */
+  /** Station position in EPSG:3857 Mercator meters */
+  stationMx: number;
+  stationMy: number;
+  /** Station geographic position (radians, for inverse projection) */
+  stationLatRad: number;
+  stationLonRad: number;
+  /** Sorted radial azimuths in degrees (for binary search) */
+  azimuths: Float32Array;
+  /** For each radial: the gate values as encoded pixels (0=no data, 1-255=dBZ) */
+  gatePixels: Uint8Array[];
+  /** Gate geometry (same for all radials in a scan) */
+  firstGateRange: number;  // meters
+  gateSpacing: number;     // meters
+  gateCount: number;
+  /** Elevation angle in degrees (for ground range correction) */
+  elevation: number;
+  /** Maximum ground range in meters (for quick rejection) */
+  maxRangeM: number;
+  /** Mercator bounding box (for quick tile rejection) */
   bounds: { west: number; east: number; north: number; south: number };
+  /** Number of radials (for logging) */
+  count: number;
 }
 
+// Keep the old name as an alias for compatibility with ingester/nexrad-tile
+export type ProjectedScan = PreparedScan;
+
 // ---------------------------------------------------------------------------
-// Core projection math
+// Mercator math
 // ---------------------------------------------------------------------------
 
-/**
- * Convert geographic lat/lon (degrees) to EPSG:3857 Mercator meters.
- * Uses R_EARTH = 6378137 to be consistent with EARTH_CIRCUMFERENCE.
- */
-export function latLonToMercator(lat: number, lon: number): { mx: number; my: number } {
+function latLonToMercator(lat: number, lon: number): { mx: number; my: number } {
   const mx = R_EARTH * (lon * DEG);
-  const latRad = lat * DEG;
-  const my = R_EARTH * Math.log(Math.tan(Math.PI / 4 + latRad / 2));
+  const my = R_EARTH * Math.log(Math.tan(Math.PI / 4 + (lat * DEG) / 2));
   return { mx, my };
 }
 
+function mercatorToLatLon(mx: number, my: number): { lat: number; lon: number } {
+  const lon = (mx / R_EARTH) / DEG;
+  const lat = (2 * Math.atan(Math.exp(my / R_EARTH)) - Math.PI / 2) / DEG;
+  return { lat, lon };
+}
+
+// ---------------------------------------------------------------------------
+// Inverse projection: pixel position → radar azimuth + slant range
+// ---------------------------------------------------------------------------
+
 /**
- * Convert slant range (meters) at a given elevation angle (degrees) to
- * ground range (meters) using the 4/3 earth refraction model.
- *
- * The 4/3 model approximates atmospheric refraction by using an effective
- * earth radius K_E = (4/3) * R_EARTH. The formula derives from the geometry
- * of a radar beam traveling at a shallow elevation over a curved earth:
- *
- *   ground_range = K_E * arcsin(s * cos(el) / K_E)
- *
- * where s is slant range and el is elevation angle. For typical NEXRAD ranges
- * (< 460 km) and low tilts (0.5°), the correction is small but worth applying.
+ * Given a pixel's lat/lon and the station's lat/lon, compute the azimuth (degrees)
+ * and ground distance (meters) from the station to the pixel.
  */
-export function groundRange(slantRangeM: number, elevDeg: number): number {
+function inverseGeodesic(
+  stationLatRad: number, stationLonRad: number,
+  pixelLat: number, pixelLon: number,
+): { azimuth: number; groundRangeM: number } {
+  const lat2 = pixelLat * DEG;
+  const lon2 = pixelLon * DEG;
+  const dLon = lon2 - stationLonRad;
+
+  const sinLat1 = Math.sin(stationLatRad);
+  const cosLat1 = Math.cos(stationLatRad);
+  const sinLat2 = Math.sin(lat2);
+  const cosLat2 = Math.cos(lat2);
+  const sinDLon = Math.sin(dLon);
+  const cosDLon = Math.cos(dLon);
+
+  // Angular distance (great circle)
+  const cosD = sinLat1 * sinLat2 + cosLat1 * cosLat2 * cosDLon;
+  const d = Math.acos(Math.max(-1, Math.min(1, cosD)));
+  const groundRangeM = d * R_EARTH;
+
+  // Azimuth (bearing from station to pixel)
+  const y = sinDLon * cosLat2;
+  const x = cosLat1 * sinLat2 - sinLat1 * cosLat2 * cosDLon;
+  let az = Math.atan2(y, x) / DEG;
+  if (az < 0) az += 360;
+
+  return { azimuth: az, groundRangeM };
+}
+
+/**
+ * Convert ground range to slant range using the 4/3 earth model (inverse).
+ * slantRange = sqrt(groundRange^2 + 2*K_E*groundRange*sin(el) + K_E^2) - K_E...
+ * Actually, for the inverse we use: s = K_E * sin(d/K_E) / cos(el)
+ * But for small angles, ground range ≈ slant range * cos(el), so:
+ */
+function groundRangeToSlantRange(groundRangeM: number, elevDeg: number): number {
   const el = elevDeg * DEG;
-  const arg = (slantRangeM * Math.cos(el)) / K_E;
-  // Clamp to [-1, 1] to guard against floating-point overflow at extreme ranges
-  return K_E * Math.asin(Math.max(-1, Math.min(1, arg)));
-}
-
-/**
- * Given a station position, bearing, and ground range, compute the gate's
- * geographic position using spherical trigonometry (great-circle navigation).
- *
- * Formula (direct geodetic problem on a sphere):
- *   lat2 = arcsin(sin(lat1)*cos(d) + cos(lat1)*sin(d)*cos(az))
- *   lon2 = lon1 + atan2(sin(az)*sin(d)*cos(lat1), cos(d) - sin(lat1)*sin(lat2))
- *
- * where d = ground_range / R_EARTH (angular distance in radians).
- */
-export function gateLatLon(
-  stationLat: number,
-  stationLon: number,
-  azimuthDeg: number,
-  groundRangeM: number,
-): { lat: number; lon: number } {
-  const lat1 = stationLat * DEG;
-  const lon1 = stationLon * DEG;
-  const az = azimuthDeg * DEG;
-  const d = groundRangeM / R_EARTH;  // angular distance in radians
-
-  const sinLat1 = Math.sin(lat1);
-  const cosLat1 = Math.cos(lat1);
-  const sinD = Math.sin(d);
-  const cosD = Math.cos(d);
-  const cosAz = Math.cos(az);
-  const sinAz = Math.sin(az);
-
-  const sinLat2 = sinLat1 * cosD + cosLat1 * sinD * cosAz;
-  const lat2 = Math.asin(Math.max(-1, Math.min(1, sinLat2)));
-  const lon2 = lon1 + Math.atan2(sinAz * sinD * cosLat1, cosD - sinLat1 * sinLat2);
-
-  return {
-    lat: lat2 / DEG,
-    lon: lon2 / DEG,
-  };
+  const d = groundRangeM / K_E;
+  // Inverse of: groundRange = K_E * arcsin(slantRange * cos(el) / K_E)
+  // => slantRange = K_E * sin(d) / cos(el)
+  return K_E * Math.sin(d) / Math.cos(el);
 }
 
 // ---------------------------------------------------------------------------
-// projectScan — pre-project all valid gates (runs once per scan update)
+// prepareScan — pre-process polar data for inverse projection
 // ---------------------------------------------------------------------------
 
 /**
- * Pre-project all valid gates from a polar scan into EPSG:3857 Mercator.
- *
- * Filters out:
- *   - NaN gates (no data / below threshold / range folding)
- *   - Gates with dBZ < -10 (below the encoding floor in dbzToPixel)
- *
- * Returns typed arrays of Mercator coordinates and encoded pixel values,
- * plus a bounding box for fast tile intersection tests.
+ * Prepare a scan for fast inverse-projection tile rendering.
+ * Sorts radials by azimuth and pre-encodes gate values to pixels.
  */
-export function projectScan(station: NexradStation, scan: ScanData): ProjectedScan {
-  // Pre-count valid gates to allocate exact-sized typed arrays
-  let validCount = 0;
-  for (const radial of scan.radials) {
-    for (let g = 0; g < radial.values.length; g++) {
-      const v = radial.values[g];
-      if (!isNaN(v) && v >= -10) validCount++;
-    }
-  }
+export function projectScan(station: NexradStation, scan: ScanData): PreparedScan {
+  const { mx: stationMx, my: stationMy } = latLonToMercator(station.lat, station.lon);
 
-  const mx = new Float64Array(validCount);
-  const my = new Float64Array(validCount);
-  const pixels = new Uint8Array(validCount);
+  // Sort radials by azimuth for binary search
+  const sorted = [...scan.radials].sort((a, b) => a.azimuth - b.azimuth);
 
-  let idx = 0;
-  let boundsWest = Infinity;
-  let boundsEast = -Infinity;
-  let boundsNorth = -Infinity;
-  let boundsSouth = Infinity;
+  const azimuths = new Float32Array(sorted.length);
+  const gatePixels: Uint8Array[] = [];
 
-  for (const radial of scan.radials) {
-    const { azimuth, elevation, firstGateRange, gateSpacing, values } = radial;
+  // Use first radial's geometry (consistent within a scan)
+  const firstRadial = sorted[0];
+  const firstGateRange = firstRadial.firstGateRange;
+  const gateSpacing = firstRadial.gateSpacing;
+  const gateCount = firstRadial.values.length;
 
+  for (let i = 0; i < sorted.length; i++) {
+    azimuths[i] = sorted[i].azimuth;
+
+    // Pre-encode dBZ values to pixel values
+    const values = sorted[i].values;
+    const pixels = new Uint8Array(values.length);
     for (let g = 0; g < values.length; g++) {
       const dbz = values[g];
-      if (isNaN(dbz) || dbz < -10) continue;
-
-      // Slant range to the center of this gate
-      const slantRangeM = firstGateRange + g * gateSpacing;
-
-      // Slant range → ground range (4/3 earth model)
-      const grange = groundRange(slantRangeM, elevation);
-
-      // Station + azimuth + ground range → gate lat/lon
-      const { lat, lon } = gateLatLon(station.lat, station.lon, azimuth, grange);
-
-      // Lat/lon → Mercator meters
-      const merc = latLonToMercator(lat, lon);
-
-      mx[idx] = merc.mx;
-      my[idx] = merc.my;
-      pixels[idx] = dbzToPixel(dbz);
-      idx++;
-
-      if (merc.mx < boundsWest) boundsWest = merc.mx;
-      if (merc.mx > boundsEast) boundsEast = merc.mx;
-      if (merc.my > boundsNorth) boundsNorth = merc.my;
-      if (merc.my < boundsSouth) boundsSouth = merc.my;
+      if (isNaN(dbz) || dbz < -10) {
+        pixels[g] = 0;  // no data
+      } else {
+        pixels[g] = dbzToPixel(dbz);
+      }
     }
+    gatePixels.push(pixels);
   }
 
-  // Handle degenerate case (no valid points)
-  if (validCount === 0) {
-    boundsWest = 0; boundsEast = 0; boundsNorth = 0; boundsSouth = 0;
-  }
+  // Compute max range and bounding box
+  const maxSlantRange = firstGateRange + gateCount * gateSpacing;
+  const maxGroundRange = maxSlantRange;  // approximate (close enough for bounds)
+  const maxRangeKm = maxGroundRange / 1000;
+
+  // Bounding box: station ± maxRange in all directions (approximate)
+  const dLat = (maxGroundRange / R_EARTH) / DEG;
+  const dLon = dLat / Math.cos(station.lat * DEG);
+
+  const sw = latLonToMercator(station.lat - dLat, station.lon - dLon);
+  const ne = latLonToMercator(station.lat + dLat, station.lon + dLon);
 
   return {
-    stationId: scan.stationId,
+    stationId: station.id,
     timestamp: scan.timestamp,
-    mx,
-    my,
-    pixels,
-    count: validCount,
-    bounds: { west: boundsWest, east: boundsEast, north: boundsNorth, south: boundsSouth },
+    stationMx,
+    stationMy,
+    stationLatRad: station.lat * DEG,
+    stationLonRad: station.lon * DEG,
+    azimuths,
+    gatePixels,
+    firstGateRange,
+    gateSpacing,
+    gateCount,
+    elevation: scan.elevation,
+    maxRangeM: maxGroundRange,
+    bounds: { west: sw.mx, east: ne.mx, north: ne.my, south: sw.my },
+    count: sorted.length,
   };
 }
 
 // ---------------------------------------------------------------------------
-// renderTile — nearest-neighbor lookup via spatial grid (hot path)
+// Binary search for nearest radial by azimuth
 // ---------------------------------------------------------------------------
 
 /**
- * Render a 256x256 grayscale tile from one or more pre-projected scans.
+ * Find the index of the nearest radial to the given azimuth.
+ * Handles wraparound (e.g., azimuth=359 should match radial at 0.5).
+ */
+function findNearestRadial(azimuths: Float32Array, targetAz: number): number {
+  const n = azimuths.length;
+  if (n === 0) return -1;
+
+  // Binary search for insertion point
+  let lo = 0, hi = n;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (azimuths[mid] < targetAz) lo = mid + 1;
+    else hi = mid;
+  }
+
+  // Compare the two candidates (lo-1 and lo) accounting for wraparound
+  const idxA = (lo - 1 + n) % n;
+  const idxB = lo % n;
+
+  const diffA = Math.abs(angleDiff(azimuths[idxA], targetAz));
+  const diffB = Math.abs(angleDiff(azimuths[idxB], targetAz));
+
+  return diffA <= diffB ? idxA : idxB;
+}
+
+/** Shortest angular difference in degrees, accounting for wraparound */
+function angleDiff(a: number, b: number): number {
+  let d = b - a;
+  if (d > 180) d -= 360;
+  if (d < -180) d += 360;
+  return d;
+}
+
+// ---------------------------------------------------------------------------
+// renderTile — inverse projection (hot path)
+// ---------------------------------------------------------------------------
+
+/**
+ * Render a 256x256 grayscale tile from one or more prepared scans.
  *
- * Algorithm:
- *   1. Quick-reject scans whose bounds don't intersect the tile (+ padding)
- *   2. Collect all points within the padded tile bounds into local arrays
- *   3. Build a 64x64 spatial grid for O(1) candidate lookup per pixel
- *   4. For each output pixel, find nearest point within search radius
- *   5. Return null if the tile is entirely empty (all zeros)
+ * For each output pixel:
+ *   1. Convert pixel position to lat/lon
+ *   2. Compute azimuth and range from each station
+ *   3. If within range, find nearest radial (binary search) and gate (direct index)
+ *   4. Sample the pre-encoded pixel value
  *
- * Search radius scales with zoom level to handle the transition between
- * zoom levels where pixels are larger than gate spacing vs. smaller:
- *   - At low zoom (z8), many gates map to the same pixel → just pick nearest
- *   - At high zoom (z14+), pixels < gate spacing → need a generous radius to
- *     bridge the gap between measurement points
- *
- * @returns 256*256 Uint8Array (row-major, y=0 is north), or null if empty
+ * This is gap-free by construction — every pixel within radar coverage gets a value.
  */
 export function renderTile(
   z: number,
   x: number,
   y: number,
-  projectedScans: ProjectedScan[],
+  projectedScans: PreparedScan[],
 ): Uint8Array | null {
   const bounds = tileToMercatorBounds(z, x, y);
   const tileWidthM = bounds.east - bounds.west;
   const tileHeightM = bounds.north - bounds.south;
   const pixelWidthM = tileWidthM / TILE_SIZE;
-  // const pixelHeightM = tileHeightM / TILE_SIZE;  // square pixels in Mercator
+  const pixelHeightM = tileHeightM / TILE_SIZE;
 
-  // Search radius — must account for BOTH gate spacing (250m in range direction)
-  // AND azimuthal spacing (up to ~4km at far range).
-  //
-  // NEXRAD super-res: 0.5° azimuth, 250m gates, 460km max range.
-  // At 460km range, adjacent radials are: 460000 * sin(0.5° * π/180) ≈ 4015m apart.
-  // At 230km range: ~2008m. At 100km: ~873m.
-  //
-  // We use 2500m as a reasonable search radius — covers azimuthal gaps at
-  // typical ranges while not over-smearing close-range data. This is roughly
-  // half the max azimuthal gap, meaning adjacent radials overlap.
-  const SEARCH_RADIUS_M = 2500;
-  const searchRadiusPx = Math.max(2, SEARCH_RADIUS_M / pixelWidthM);
-  const searchRadiusM = SEARCH_RADIUS_M;
-
-  // Padded tile bounds for point collection (pad by search radius)
-  const padM = searchRadiusM;
-  const tileWest = bounds.west - padM;
-  const tileEast = bounds.east + padM;
-  const tileNorth = bounds.north + padM;
-  const tileSouth = bounds.south - padM;
-
-  // Collect all points from all scans that fall within the padded bounds
-  // (quick-reject entire scans first using their bounding box)
-  let totalPoints = 0;
-  const scanCandidates: ProjectedScan[] = [];
+  // Quick-reject scans that don't overlap this tile
+  const candidates: PreparedScan[] = [];
   for (const scan of projectedScans) {
-    if (scan.count === 0) continue;
-    // Scan bounds must overlap padded tile bounds
     if (
-      scan.bounds.east < tileWest ||
-      scan.bounds.west > tileEast ||
-      scan.bounds.north < tileSouth ||
-      scan.bounds.south > tileNorth
-    ) {
-      continue;  // no overlap
-    }
-    scanCandidates.push(scan);
-    totalPoints += scan.count;
+      scan.bounds.east < bounds.west ||
+      scan.bounds.west > bounds.east ||
+      scan.bounds.north < bounds.south ||
+      scan.bounds.south > bounds.north
+    ) continue;
+    candidates.push(scan);
   }
 
-  if (totalPoints === 0) return null;
+  if (candidates.length === 0) return null;
 
-  // Collect points from candidate scans that fall within padded tile bounds
-  // Use separate arrays to avoid reallocating; collect as we filter
-  const localMx = new Float64Array(totalPoints);
-  const localMy = new Float64Array(totalPoints);
-  const localPx = new Uint8Array(totalPoints);
-  let localCount = 0;
-
-  for (const scan of scanCandidates) {
-    const { mx, my, pixels, count } = scan;
-    for (let i = 0; i < count; i++) {
-      const px = mx[i];
-      const py = my[i];
-      if (px >= tileWest && px <= tileEast && py >= tileSouth && py <= tileNorth) {
-        localMx[localCount] = px;
-        localMy[localCount] = py;
-        localPx[localCount] = pixels[i];
-        localCount++;
-      }
-    }
-  }
-
-  if (localCount === 0) return null;
-
-  // -------------------------------------------------------------------------
-  // Build a 64x64 spatial grid for fast nearest-neighbor lookup.
-  //
-  // Each cell covers (tileWidthM / GRID_SIZE) x (tileHeightM / GRID_SIZE)
-  // Mercator meters, corresponding to 4x4 pixels.
-  //
-  // We store, for each cell, an array of indices into localMx/localMy/localPx.
-  // -------------------------------------------------------------------------
-  const gridCellW = tileWidthM / GRID_SIZE;
-  const gridCellH = tileHeightM / GRID_SIZE;
-
-  // Use flat array of index lists (each entry is an array of point indices)
-  const grid: number[][] = new Array(GRID_SIZE * GRID_SIZE);
-  for (let i = 0; i < grid.length; i++) grid[i] = [];
-
-  for (let i = 0; i < localCount; i++) {
-    const px = localMx[i];
-    const py = localMy[i];
-    // Map Mercator coords to grid cell (clamped to grid bounds)
-    const gx = Math.min(GRID_SIZE - 1, Math.max(0, Math.floor((px - bounds.west) / gridCellW)));
-    const gy = Math.min(GRID_SIZE - 1, Math.max(0, Math.floor((bounds.north - py) / gridCellH)));
-    grid[gy * GRID_SIZE + gx].push(i);
-  }
-
-  // Number of grid cells to search around each pixel's cell
-  // (ceil of searchRadiusPx / 4, since each cell = 4 pixels)
-  const cellSearchRadius = Math.ceil(searchRadiusPx / 4);
-  const searchRadiusMSq = searchRadiusM * searchRadiusM;
-
-  // -------------------------------------------------------------------------
-  // Render each output pixel
-  // -------------------------------------------------------------------------
   const output = new Uint8Array(TILE_SIZE * TILE_SIZE);
   let hasData = false;
 
+  // Maximum azimuth gap allowed (1.5x the expected spacing, typically 0.75°)
+  const maxAzGap = 0.75;
+
   for (let ty = 0; ty < TILE_SIZE; ty++) {
+    // Mercator Y for this row
+    const pmy = bounds.north - (ty + 0.5) * pixelHeightM;
+
     for (let tx = 0; tx < TILE_SIZE; tx++) {
-      // Mercator center of this pixel
+      // Mercator X for this column
       const pmx = bounds.west + (tx + 0.5) * pixelWidthM;
-      const pmy = bounds.north - (ty + 0.5) * pixelWidthM;  // square pixels
 
-      // Grid cell this pixel falls in
-      const pcx = Math.min(GRID_SIZE - 1, Math.max(0, Math.floor((pmx - bounds.west) / gridCellW)));
-      const pcy = Math.min(GRID_SIZE - 1, Math.max(0, Math.floor((bounds.north - pmy) / gridCellH)));
+      // Convert pixel Mercator position to lat/lon
+      const { lat, lon } = mercatorToLatLon(pmx, pmy);
 
-      // Search neighboring cells
-      let bestDist2 = Infinity;
+      // Try each candidate scan (usually 1-2 stations cover a tile)
       let bestPixel = 0;
 
-      const cxMin = Math.max(0, pcx - cellSearchRadius);
-      const cxMax = Math.min(GRID_SIZE - 1, pcx + cellSearchRadius);
-      const cyMin = Math.max(0, pcy - cellSearchRadius);
-      const cyMax = Math.min(GRID_SIZE - 1, pcy + cellSearchRadius);
+      for (const scan of candidates) {
+        // Quick distance check in Mercator space
+        const dx = pmx - scan.stationMx;
+        const dy = pmy - scan.stationMy;
+        const mercDistSq = dx * dx + dy * dy;
+        // Rough max range in Mercator meters (overestimates slightly, that's fine)
+        const maxMercRange = scan.maxRangeM * 1.2;
+        if (mercDistSq > maxMercRange * maxMercRange) continue;
 
-      for (let cy = cyMin; cy <= cyMax; cy++) {
-        for (let cx = cxMin; cx <= cxMax; cx++) {
-          const cell = grid[cy * GRID_SIZE + cx];
-          for (let k = 0; k < cell.length; k++) {
-            const pi = cell[k];
-            const dx = localMx[pi] - pmx;
-            const dy = localMy[pi] - pmy;
-            const d2 = dx * dx + dy * dy;
-            if (d2 < bestDist2) {
-              bestDist2 = d2;
-              bestPixel = localPx[pi];
-            }
-          }
+        // Inverse geodesic: pixel → azimuth + ground range from station
+        const { azimuth, groundRangeM } = inverseGeodesic(
+          scan.stationLatRad, scan.stationLonRad, lat, lon
+        );
+
+        // Convert ground range to slant range for gate index lookup
+        const slantRangeM = groundRangeToSlantRange(groundRangeM, scan.elevation);
+
+        // Check if within gate range
+        if (slantRangeM < scan.firstGateRange) continue;
+        const gateIdx = Math.round((slantRangeM - scan.firstGateRange) / scan.gateSpacing);
+        if (gateIdx < 0 || gateIdx >= scan.gateCount) continue;
+
+        // Find nearest radial by azimuth (binary search)
+        const radialIdx = findNearestRadial(scan.azimuths, azimuth);
+        if (radialIdx < 0) continue;
+
+        // Check azimuth gap — don't extrapolate too far from actual measurements
+        const azDiff = Math.abs(angleDiff(scan.azimuths[radialIdx], azimuth));
+        if (azDiff > maxAzGap) continue;
+
+        // Sample the pre-encoded pixel value
+        const pixel = scan.gatePixels[radialIdx][gateIdx];
+        if (pixel > bestPixel) {
+          bestPixel = pixel;  // take max value if multiple stations overlap
         }
       }
 
-      if (bestDist2 <= searchRadiusMSq && bestPixel > 0) {
+      if (bestPixel > 0) {
         output[ty * TILE_SIZE + tx] = bestPixel;
         hasData = true;
       }
