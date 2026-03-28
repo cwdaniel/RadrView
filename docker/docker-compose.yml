@@ -8,7 +8,7 @@ services:
       dockerfile: docker/Dockerfile
     command: ["node", "dist/ingest/mrms.js"]
     volumes:
-      - ../data:/data
+      - radrview-data:/data
     environment:
       - REDIS_URL=redis://redis:6379
       - DATA_DIR=/data
@@ -26,7 +26,7 @@ services:
       dockerfile: docker/Dockerfile
     command: ["node", "dist/ingest/mrms.js"]
     volumes:
-      - ../data:/data
+      - radrview-data:/data
     environment:
       - REDIS_URL=redis://redis:6379
       - DATA_DIR=/data
@@ -43,7 +43,7 @@ services:
       dockerfile: docker/Dockerfile
     command: ["node", "dist/ingest/mrms.js"]
     volumes:
-      - ../data:/data
+      - radrview-data:/data
     environment:
       - REDIS_URL=redis://redis:6379
       - DATA_DIR=/data
@@ -60,7 +60,7 @@ services:
       dockerfile: docker/Dockerfile
     command: ["node", "dist/ingest/mrms.js"]
     volumes:
-      - ../data:/data
+      - radrview-data:/data
     environment:
       - REDIS_URL=redis://redis:6379
       - DATA_DIR=/data
@@ -78,7 +78,7 @@ services:
       dockerfile: docker/Dockerfile
     command: ["node", "dist/ingest/mrms.js"]
     volumes:
-      - ../data:/data
+      - radrview-data:/data
     environment:
       - REDIS_URL=redis://redis:6379
       - DATA_DIR=/data
@@ -96,7 +96,7 @@ services:
       dockerfile: docker/Dockerfile
     command: ["node", "dist/ingest/mrms.js"]
     volumes:
-      - ../data:/data
+      - radrview-data:/data
     environment:
       - REDIS_URL=redis://redis:6379
       - DATA_DIR=/data
@@ -114,12 +114,12 @@ services:
       dockerfile: docker/Dockerfile
     command: ["node", "dist/pipeline/tiler.js"]
     volumes:
-      - ../data:/data
+      - radrview-data:/data
     environment:
       - REDIS_URL=redis://redis:6379
       - DATA_DIR=/data
       - ZOOM_MIN=2
-      - ZOOM_MAX=10
+      - ZOOM_MAX=7
       - LOG_LEVEL=info
     restart: unless-stopped
     depends_on:
@@ -132,20 +132,17 @@ services:
       dockerfile: docker/Dockerfile
     command: ["node", "dist/pipeline/tiler.js"]
     volumes:
-      - ../data:/data
+      - radrview-data:/data
     environment:
       - REDIS_URL=redis://redis:6379
       - DATA_DIR=/data
       - ZOOM_MIN=2
-      - ZOOM_MAX=10
+      - ZOOM_MAX=7
       - LOG_LEVEL=info
     restart: unless-stopped
     depends_on:
       - redis
 
-  # Server runs on host for GPU upscaler access (Vulkan not available in Docker WSL2).
-  # Start manually: pnpm dev:server
-  # Or use the Docker version without upscaling:
   server:
     container_name: radrview-server
     build:
@@ -155,12 +152,15 @@ services:
     ports:
       - "8600:8600"
     volumes:
-      - ../data:/data
+      - radrview-data:/data
     environment:
       - REDIS_URL=redis://redis:6379
       - DATA_DIR=/data
       - PORT=8600
       - LOG_LEVEL=info
+      - NEXRAD_ENABLED=true
+      - NEXRAD_STATIONS=all
+      - NEXRAD_ZOOM_MIN=8
     restart: unless-stopped
     depends_on:
       - redis
@@ -172,7 +172,7 @@ services:
       dockerfile: docker/Dockerfile
     command: ["node", "dist/ingest/dwd.js"]
     volumes:
-      - ../data:/data
+      - radrview-data:/data
     environment:
       - REDIS_URL=redis://redis:6379
       - DATA_DIR=/data
@@ -188,36 +188,12 @@ services:
       dockerfile: docker/Dockerfile
     command: ["node", "dist/pipeline/cleanup.js"]
     volumes:
-      - ../data:/data
+      - radrview-data:/data
     environment:
       - REDIS_URL=redis://redis:6379
       - DATA_DIR=/data
       - RETENTION_HOURS=24
       - LOG_LEVEL=info
-    restart: unless-stopped
-    depends_on:
-      - redis
-
-  upscaler:
-    container_name: radrview-upscaler
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile.upscaler
-    command: ["node", "dist/pipeline/upscaler.js"]
-    volumes:
-      - ../data:/data
-    environment:
-      - REDIS_URL=redis://redis:6379
-      - DATA_DIR=/data
-      - LOG_LEVEL=info
-      - UPSCALE_PALETTE=dark
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
     restart: unless-stopped
     depends_on:
       - redis
@@ -229,7 +205,7 @@ services:
       dockerfile: docker/Dockerfile
     command: ["node", "dist/ingest/ec.js"]
     volumes:
-      - ../data:/data
+      - radrview-data:/data
     environment:
       - REDIS_URL=redis://redis:6379
       - DATA_DIR=/data
@@ -245,12 +221,12 @@ services:
       dockerfile: docker/Dockerfile
     command: ["node", "dist/pipeline/compositor.js"]
     volumes:
-      - ../data:/data
+      - radrview-data:/data
     environment:
       - REDIS_URL=redis://redis:6379
       - DATA_DIR=/data
       - ZOOM_MIN=2
-      - ZOOM_MAX=10
+      - ZOOM_MAX=7
       - LOG_LEVEL=info
     restart: unless-stopped
     depends_on:
@@ -267,5 +243,7 @@ services:
     restart: unless-stopped
 
 volumes:
+  radrview-data:
+    driver: local
   redis-data:
     driver: local
