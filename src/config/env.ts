@@ -14,4 +14,7 @@ export const config = {
   retentionHours: parseInt(process.env.RETENTION_HOURS || '24', 10),
   logLevel: parseLogLevel(process.env.LOG_LEVEL),
   pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS || '30000', 10),
+  nexradEnabled: process.env.NEXRAD_ENABLED !== 'false',  // on by default
+  nexradZoomMin: parseInt(process.env.NEXRAD_ZOOM_MIN || '8', 10),
+  nexradStations: process.env.NEXRAD_STATIONS || 'all',
 } as const;

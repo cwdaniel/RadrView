@@ -10,8 +10,11 @@ import { createLogger } from '../utils/logger.js';
 import { createFramesRouter } from './frames.js';
 import { createHealthRouter } from './health.js';
 import { loadPalettes, getLUT, isTypedPalette, colorizeTilePng, colorizePrecipType, createPaletteRouter } from './palette.js';
-import { getUpscaledTile, isUpscalerAvailable } from './upscale.js';
 import { createMetricsRouter, recordCacheHit, recordCacheMiss, recordServeDuration } from './metrics.js';
+import { ScanStore } from '../nexrad/scan-store.js';
+import { NexradIngester } from '../nexrad/ingester.js';
+import { createNexradTileHandler } from './nexrad-tile.js';
+import { getAllStations } from '../nexrad/stations.js';
 
 const logger = createLogger('server');
 
@@ -22,7 +25,10 @@ const TRANSPARENT_PNG = Buffer.from(
   'base64',
 );
 
-export function createApp(redis: Redis): { app: ReturnType<typeof express> } {
+export function createApp(
+  redis: Redis,
+  options?: { nexradTileHandler?: (z: number, x: number, y: number) => Promise<Buffer | null> }
+): { app: ReturnType<typeof express> } {
   const app = express();
 
   const tileCache = new LRUCache<string, Buffer>({
@@ -60,6 +66,11 @@ export function createApp(redis: Redis): { app: ReturnType<typeof express> } {
   app.use(createPaletteRouter());
   app.use(createMetricsRouter(redis));
 
+  // NEXRAD station locations
+  app.get('/nexrad/stations', (_req, res) => {
+    res.json(getAllStations().map(s => ({ id: s.id, lat: s.lat, lon: s.lon, name: s.name })));
+  });
+
   // Tile endpoint
   app.get('/tile/:timestamp/:z/:x/:y', async (req, res) => {
     const serveStart = Date.now();
@@ -88,29 +99,34 @@ export function createApp(redis: Redis): { app: ReturnType<typeof express> } {
 
     recordCacheMiss();
 
+    // NEXRAD Level 2 for high zoom
+    const zoomNum = parseInt(z);
+    if (options?.nexradTileHandler && zoomNum >= config.nexradZoomMin) {
+      const nexradPng = await options.nexradTileHandler(zoomNum, parseInt(x), parseInt(y));
+      if (nexradPng) {
+        let colorized: Buffer;
+        if (isTypedPalette(paletteName)) {
+          const defaultLut = getLUT('default');
+          colorized = await colorizeTilePng(nexradPng, defaultLut ?? lut);
+        } else {
+          colorized = await colorizeTilePng(nexradPng, lut);
+        }
+        tileCache.set(cacheKey, colorized);
+        res.setHeader('Content-Type', 'image/png');
+        res.setHeader('X-Cache', 'nexrad');
+        res.setHeader('X-Source', 'nexrad-level2');
+        res.setHeader('Cache-Control', 'public, max-age=30');
+        res.send(colorized);
+        recordServeDuration(Date.now() - serveStart);
+        return;
+      }
+      // Fall through to MRMS/composite if no NEXRAD coverage
+    }
+
     const tileStore = getTileStore();
     const grayscalePng = await tileStore.readTile(source, timestamp, parseInt(z), parseInt(x), parseInt(y));
 
     if (!grayscalePng) {
-      // For zoom 11-12: try GPU-upscaled tile from parent zoom 10
-      const zoomNum = parseInt(z);
-      if (zoomNum >= 11 && zoomNum <= 12 && isUpscalerAvailable()) {
-        const upscaled = await getUpscaledTile(
-          source, timestamp, zoomNum, parseInt(x), parseInt(y),
-          (grayscale) => colorizeTilePng(grayscale, lut),
-          config.dataDir,
-        );
-        if (upscaled) {
-          tileCache.set(cacheKey, upscaled);
-          res.setHeader('Content-Type', 'image/png');
-          res.setHeader('X-Cache', 'upscaled');
-          await setCacheHeaders(res, timestamp, redis);
-          res.send(upscaled);
-          recordServeDuration(Date.now() - serveStart);
-          return;
-        }
-      }
-
       res.setHeader('Content-Type', 'image/png');
       await setCacheHeaders(res, timestamp, redis);
       res.send(TRANSPARENT_PNG);
@@ -167,7 +183,29 @@ const isMainModule = process.argv[1]?.endsWith('server/index.js') ||
 if (isMainModule) {
   const redis = new Redis(config.redisUrl);
   const subscriber = new Redis(config.redisUrl);
-  const { app } = createApp(redis);
+
+  // NEXRAD Level 2 ingester (runs in-process, shares memory with tile handler)
+  let nexradTileHandler: ((z: number, x: number, y: number) => Promise<Buffer | null>) | undefined;
+  if (config.nexradEnabled) {
+    const scanStore = new ScanStore();
+    const stationIds = config.nexradStations === 'all'
+      ? undefined
+      : config.nexradStations.split(',').map(s => s.trim());
+    const nexradIngester = new NexradIngester(redis, scanStore, stationIds);
+    nexradTileHandler = createNexradTileHandler(nexradIngester);
+
+    // Start ingester in background (don't await — it's a long-running loop)
+    nexradIngester.start().catch(err => {
+      logger.error({ err }, 'NEXRAD ingester failed');
+    });
+
+    logger.info({
+      stations: stationIds?.length ?? 'all',
+      zoomMin: config.nexradZoomMin,
+    }, 'NEXRAD Level 2 ingester started');
+  }
+
+  const { app } = createApp(redis, { nexradTileHandler });
   const httpServer = createServer(app);
 
   // WebSocket server for real-time frame notifications
