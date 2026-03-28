@@ -33,13 +33,22 @@ function parseChunkKey(key: string): ChunkInfo | null {
   };
 }
 
+export interface StationStatus {
+  stationId: string;
+  status: 'active' | 'stale' | 'unavailable';
+  lastDataTime: number | null;  // epoch ms of latest chunk timestamp
+  ageMinutes: number | null;
+  volumeId: string | null;
+}
+
 export class NexradIngester {
   private redis: Redis;
   private scanStore: ScanStore;
   private projectedScans = new Map<string, ProjectedScan>();
   private running = false;
   private stationIds: string[];
-  private latestVolume = new Map<string, string>();  // stationId → last processed volumeId
+  private latestVolume = new Map<string, string>();
+  private stationStatus = new Map<string, StationStatus>();
 
   constructor(redis: Redis, scanStore: ScanStore, stationIds?: string[]) {
     this.redis = redis;
@@ -53,6 +62,17 @@ export class NexradIngester {
 
   getAllProjectedScans(): ProjectedScan[] {
     return [...this.projectedScans.values()];
+  }
+
+  /** Get status for all tracked stations */
+  getStationStatuses(): StationStatus[] {
+    return this.stationIds.map(id => this.stationStatus.get(id) ?? {
+      stationId: id,
+      status: 'unavailable' as const,
+      lastDataTime: null,
+      ageMinutes: null,
+      volumeId: null,
+    });
   }
 
   async start(): Promise<void> {
@@ -163,10 +183,18 @@ export class NexradIngester {
           parseInt(tsMatch[4]), parseInt(tsMatch[5]), parseInt(tsMatch[6]),
         );
         const ageMs = Date.now() - chunkTime;
-        const MAX_AGE_MS = 30 * 60 * 1000;  // 30 minutes
+        const ageMinutes = Math.round(ageMs / 60000);
+        const MAX_AGE_MS = 60 * 60 * 1000;  // 60 minutes
         if (ageMs > MAX_AGE_MS) {
           // Stale data — skip and remove any previously cached scan
           this.projectedScans.delete(stationId);
+          this.stationStatus.set(stationId, {
+            stationId,
+            status: 'stale',
+            lastDataTime: chunkTime,
+            ageMinutes,
+            volumeId: targetVolumeId,
+          });
           return false;
         }
       }
@@ -209,8 +237,15 @@ export class NexradIngester {
         }, 'Station scan updated');
       }
 
-      // Track processed volume
+      // Track processed volume and update status
       this.latestVolume.set(stationId, targetVolumeId);
+      this.stationStatus.set(stationId, {
+        stationId,
+        status: 'active',
+        lastDataTime: scan.timestamp,
+        ageMinutes: Math.round((Date.now() - scan.timestamp) / 60000),
+        volumeId: targetVolumeId,
+      });
 
       // Update Redis health metadata
       await this.redis.hset(`source:nexrad-${stationId}`, {

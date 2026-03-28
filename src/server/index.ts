@@ -27,7 +27,10 @@ const TRANSPARENT_PNG = Buffer.from(
 
 export function createApp(
   redis: Redis,
-  options?: { nexradTileHandler?: (z: number, x: number, y: number) => Promise<Buffer | null> }
+  options?: {
+    nexradTileHandler?: (z: number, x: number, y: number) => Promise<Buffer | null>;
+    nexradIngester?: NexradIngester;
+  }
 ): { app: ReturnType<typeof express> } {
   const app = express();
 
@@ -66,9 +69,23 @@ export function createApp(
   app.use(createPaletteRouter());
   app.use(createMetricsRouter(redis));
 
-  // NEXRAD station locations
+  // NEXRAD station locations with status
   app.get('/nexrad/stations', (_req, res) => {
-    res.json(getAllStations().map(s => ({ id: s.id, lat: s.lat, lon: s.lon, name: s.name })));
+    const statuses = options?.nexradIngester?.getStationStatuses() ?? [];
+    const statusMap = new Map(statuses.map(s => [s.stationId, s]));
+
+    res.json(getAllStations().map(s => {
+      const status = statusMap.get(s.id);
+      return {
+        id: s.id,
+        lat: s.lat,
+        lon: s.lon,
+        name: s.name,
+        status: status?.status ?? 'unavailable',
+        lastDataTime: status?.lastDataTime ?? null,
+        ageMinutes: status?.ageMinutes ?? null,
+      };
+    }));
   });
 
   // Tile endpoint
@@ -186,12 +203,13 @@ if (isMainModule) {
 
   // NEXRAD Level 2 ingester (runs in-process, shares memory with tile handler)
   let nexradTileHandler: ((z: number, x: number, y: number) => Promise<Buffer | null>) | undefined;
+  let nexradIngester: NexradIngester | undefined;
   if (config.nexradEnabled) {
     const scanStore = new ScanStore();
     const stationIds = config.nexradStations === 'all'
       ? undefined
       : config.nexradStations.split(',').map(s => s.trim());
-    const nexradIngester = new NexradIngester(redis, scanStore, stationIds);
+    nexradIngester = new NexradIngester(redis, scanStore, stationIds);
     nexradTileHandler = createNexradTileHandler(nexradIngester);
 
     // Start ingester in background (don't await — it's a long-running loop)
@@ -205,7 +223,7 @@ if (isMainModule) {
     }, 'NEXRAD Level 2 ingester started');
   }
 
-  const { app } = createApp(redis, { nexradTileHandler });
+  const { app } = createApp(redis, { nexradTileHandler, nexradIngester });
   const httpServer = createServer(app);
 
   // WebSocket server for real-time frame notifications

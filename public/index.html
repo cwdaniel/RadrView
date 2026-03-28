@@ -1182,21 +1182,35 @@
     // ── Station markers ──
     const stationMarkers = L.layerGroup();
 
-    fetch('/nexrad/stations')
-      .then(r => r.json())
-      .then(stations => {
-        stations.forEach(s => {
-          L.circleMarker([s.lat, s.lon], {
-            radius: 3,
-            color: 'rgba(91,155,213,0.6)',
-            fillColor: 'rgba(91,155,213,0.3)',
-            fillOpacity: 0.5,
-            weight: 1,
-          }).bindTooltip(s.id + ' — ' + s.name, { direction: 'top', offset: [0, -5] })
-            .addTo(stationMarkers);
-        });
-      })
-      .catch(() => {});
+    function loadStationMarkers() {
+      stationMarkers.clearLayers();
+      fetch('/nexrad/stations')
+        .then(r => r.json())
+        .then(stations => {
+          stations.forEach(s => {
+            const colors = {
+              active:      { border: 'rgba(61,220,132,0.8)',  fill: 'rgba(61,220,132,0.4)' },
+              stale:       { border: 'rgba(232,164,74,0.8)',  fill: 'rgba(232,164,74,0.4)' },
+              unavailable: { border: 'rgba(217,79,79,0.6)',   fill: 'rgba(217,79,79,0.3)' },
+            };
+            const c = colors[s.status] || colors.unavailable;
+            let tip = s.id + ' — ' + s.name + '<br>' + s.status;
+            if (s.ageMinutes != null) tip += ' · ' + s.ageMinutes + ' min ago';
+            L.circleMarker([s.lat, s.lon], {
+              radius: 4,
+              color: c.border,
+              fillColor: c.fill,
+              fillOpacity: 0.6,
+              weight: 1.5,
+            }).bindTooltip(tip, { direction: 'top', offset: [0, -5] })
+              .addTo(stationMarkers);
+          });
+        })
+        .catch(() => {});
+    }
+    loadStationMarkers();
+    // Refresh station status every 2 minutes
+    setInterval(loadStationMarkers, 120000);
 
     document.getElementById('show-stations')?.addEventListener('change', function() {
       if (this.checked) {
