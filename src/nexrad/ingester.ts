@@ -2,36 +2,16 @@ import { XMLParser } from 'fast-xml-parser';
 import { Redis } from 'ioredis';
 import { createLogger } from '../utils/logger.js';
 import { getAllStations, getStation } from './stations.js';
-import { parseLevel2Reflectivity, combineAndParse } from './parser.js';
+import { parseLevel2Reflectivity } from './parser.js';
 import { projectScan, type ProjectedScan } from './projector.js';
 import { ScanStore } from './scan-store.js';
 
 const logger = createLogger('nexrad-ingester');
 
-// Real-time chunks bucket — publicly accessible, ~seconds latency
-const S3_BASE = 'https://unidata-nexrad-level2-chunks.s3.amazonaws.com';
-const POLL_INTERVAL_MS = 30_000;  // check every 30 seconds
-
-interface ChunkInfo {
-  key: string;
-  volumeId: string;
-  timestamp: string;
-  chunkNum: string;
-  chunkType: string;  // S=start, I=intermediate, E=end
-}
-
-function parseChunkKey(key: string): ChunkInfo | null {
-  // Format: KTLX/602/20260326-235516-039-I
-  const match = key.match(/^([^/]+)\/(\d+)\/(\d{8}-\d{6})-(\d+)-([SIE])$/);
-  if (!match) return null;
-  return {
-    key,
-    volumeId: match[2],
-    timestamp: match[3],
-    chunkNum: match[4],
-    chunkType: match[5],
-  };
-}
+// NEXRAD Level 2 archive bucket (migrated from noaa-nexrad-level2 in Sept 2025)
+// Public, no auth needed, full volume scans, ~5-10 min latency
+const S3_BASE = 'https://unidata-nexrad-level2.s3.amazonaws.com';
+const POLL_INTERVAL_MS = 60_000;  // check every 60 seconds
 
 export interface StationStatus {
   stationId: string;
@@ -115,11 +95,19 @@ export class NexradIngester {
     }
   }
 
-  /** Fetch the latest volume chunks for a station. Returns true if a new scan was ingested. */
+  /** Fetch the latest archive volume for a station. Returns true if a new scan was ingested. */
   private async fetchLatest(stationId: string): Promise<boolean> {
     try {
-      // List recent chunks for this station
-      const listUrl = `${S3_BASE}/?list-type=2&prefix=${encodeURIComponent(stationId + '/')}&max-keys=200`;
+      // Archive bucket path: /<Year>/<Month>/<Day>/<Station>/<filename>
+      const now = new Date();
+      const prefix = [
+        now.getUTCFullYear(),
+        String(now.getUTCMonth() + 1).padStart(2, '0'),
+        String(now.getUTCDate()).padStart(2, '0'),
+        stationId,
+      ].join('/') + '/';
+
+      const listUrl = `${S3_BASE}/?list-type=2&prefix=${encodeURIComponent(prefix)}`;
       const listResp = await fetch(listUrl);
       if (!listResp.ok) return false;
       const xml = await listResp.text();
@@ -127,97 +115,50 @@ export class NexradIngester {
       const parsed = parser.parse(xml);
       const result = parsed?.ListBucketResult;
       if (!result?.Contents) return false;
-      const rawContents: Array<{ Key: string }> = Array.isArray(result.Contents)
+      const contents: Array<{ Key: string }> = Array.isArray(result.Contents)
         ? result.Contents
         : [result.Contents];
 
-      // Parse chunk metadata
-      const chunks = rawContents
-        .map(o => parseChunkKey(o.Key))
-        .filter((c): c is ChunkInfo => c !== null);
+      // Find latest V06 or V08 file
+      const volumeFiles = contents
+        .filter(o => o.Key && (o.Key.endsWith('_V06') || o.Key.endsWith('_V08')))
+        .sort((a, b) => a.Key.localeCompare(b.Key));
+      const latest = volumeFiles[volumeFiles.length - 1];
+      if (!latest?.Key) return false;
 
-      if (chunks.length === 0) return false;
+      // Parse timestamp from filename: KTLX20260328_234304_V06
+      const tsMatch = latest.Key.match(/(\d{8})_(\d{6})_V\d{2}$/);
+      if (!tsMatch) return false;
+      const fileTime = Date.UTC(
+        parseInt(tsMatch[1].slice(0, 4)), parseInt(tsMatch[1].slice(4, 6)) - 1,
+        parseInt(tsMatch[1].slice(6, 8)),
+        parseInt(tsMatch[2].slice(0, 2)), parseInt(tsMatch[2].slice(2, 4)),
+        parseInt(tsMatch[2].slice(4, 6)),
+      );
 
-      // Group chunks by volume ID
-      const volumes = new Map<string, ChunkInfo[]>();
-      for (const c of chunks) {
-        const arr = volumes.get(c.volumeId) || [];
-        arr.push(c);
-        volumes.set(c.volumeId, arr);
+      // Check staleness — reject data older than 30 minutes
+      const ageMs = Date.now() - fileTime;
+      const ageMinutes = Math.round(ageMs / 60000);
+      const MAX_AGE_MS = 30 * 60 * 1000;
+      if (ageMs > MAX_AGE_MS) {
+        this.projectedScans.delete(stationId);
+        this.stationStatus.set(stationId, {
+          stationId, status: 'stale', lastDataTime: fileTime, ageMinutes, volumeId: null,
+        });
+        return false;
       }
 
-      // Find the latest complete volume (has an 'E' end chunk)
-      // Or the latest volume with an 'S' start chunk (partial but has base tilt)
-      let targetVolumeId: string | null = null;
-      let targetChunks: ChunkInfo[] = [];
+      // Skip if already processed this file
+      if (this.latestVolume.get(stationId) === latest.Key) return false;
 
-      // Sort volume IDs descending
-      const volIds = [...volumes.keys()].sort((a, b) => parseInt(b) - parseInt(a));
+      // Download the full volume file (single file, 5-25 MB, bzip2-compressed internally)
+      const fileUrl = `${S3_BASE}/${latest.Key}`;
+      const fileResp = await fetch(fileUrl);
+      if (!fileResp.ok) return false;
+      const buf = Buffer.from(await fileResp.arrayBuffer());
 
-      for (const vid of volIds) {
-        const vChunks = volumes.get(vid)!;
-        const hasEnd = vChunks.some(c => c.chunkType === 'E');
-        const hasStart = vChunks.some(c => c.chunkType === 'S');
-
-        if (hasEnd && hasStart) {
-          // Complete volume — preferred
-          targetVolumeId = vid;
-          targetChunks = vChunks.sort((a, b) => a.chunkNum.localeCompare(b.chunkNum));
-          break;
-        }
-        if (hasStart && !targetVolumeId) {
-          // Partial volume with start — use as fallback
-          targetVolumeId = vid;
-          targetChunks = vChunks.sort((a, b) => a.chunkNum.localeCompare(b.chunkNum));
-        }
-      }
-
-      if (!targetVolumeId || targetChunks.length === 0) return false;
-
-      // Check if the data is recent — reject scans older than 30 minutes
-      const startChunk = targetChunks.find(c => c.chunkType === 'S') || targetChunks[0];
-      const tsMatch = startChunk.timestamp.match(/^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})$/);
-      if (tsMatch) {
-        const chunkTime = Date.UTC(
-          parseInt(tsMatch[1]), parseInt(tsMatch[2]) - 1, parseInt(tsMatch[3]),
-          parseInt(tsMatch[4]), parseInt(tsMatch[5]), parseInt(tsMatch[6]),
-        );
-        const ageMs = Date.now() - chunkTime;
-        const ageMinutes = Math.round(ageMs / 60000);
-        const MAX_AGE_MS = 60 * 60 * 1000;  // 60 minutes
-        if (ageMs > MAX_AGE_MS) {
-          // Stale data — skip and remove any previously cached scan
-          this.projectedScans.delete(stationId);
-          this.stationStatus.set(stationId, {
-            stationId,
-            status: 'stale',
-            lastDataTime: chunkTime,
-            ageMinutes,
-            volumeId: targetVolumeId,
-          });
-          return false;
-        }
-      }
-
-      // Skip if we already processed this volume
-      if (this.latestVolume.get(stationId) === targetVolumeId) return false;
-
-      // Download all chunks for this volume
-      const chunkBuffers: Buffer[] = [];
-      for (const chunk of targetChunks) {
-        const fileUrl = `${S3_BASE}/${chunk.key}`;
-        const fileResp = await fetch(fileUrl);
-        if (!fileResp.ok) continue;
-        chunkBuffers.push(Buffer.from(await fileResp.arrayBuffer()));
-      }
-
-      if (chunkBuffers.length === 0) return false;
-
-      // Parse — combine chunks if multiple, or parse single chunk directly
-      const scan = chunkBuffers.length === 1
-        ? parseLevel2Reflectivity(chunkBuffers[0])
-        : combineAndParse(chunkBuffers);
-
+      // Parse
+      const scan = parseLevel2Reflectivity(buf);
       if (!scan) return false;
 
       // Store raw scan
@@ -232,26 +173,22 @@ export class NexradIngester {
           stationId,
           radials: scan.radials.length,
           points: projected.count,
-          volumeId: targetVolumeId,
-          chunks: chunkBuffers.length,
+          ageMinutes,
         }, 'Station scan updated');
       }
 
-      // Track processed volume and update status
-      this.latestVolume.set(stationId, targetVolumeId);
+      // Track processed file and update status
+      this.latestVolume.set(stationId, latest.Key);
       this.stationStatus.set(stationId, {
-        stationId,
-        status: 'active',
-        lastDataTime: scan.timestamp,
-        ageMinutes: Math.round((Date.now() - scan.timestamp) / 60000),
-        volumeId: targetVolumeId,
+        stationId, status: 'active', lastDataTime: scan.timestamp,
+        ageMinutes: Math.round((Date.now() - scan.timestamp) / 60000), volumeId: null,
       });
 
       // Update Redis health metadata
       await this.redis.hset(`source:nexrad-${stationId}`, {
         lastSuccess: String(Date.now()),
         consecutiveErrors: '0',
-      }).catch(() => {});  // non-critical
+      }).catch(() => {});
 
       return true;
     } catch (err) {
