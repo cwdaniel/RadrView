@@ -73,11 +73,38 @@ function extractVcp(radar: Level2Radar): number {
 const RHOHV_THRESHOLD = 0.9;
 
 /**
+ * Build a RhoHV lookup array aligned to reflectivity gates.
+ *
+ * RhoHV and REF often have different gate counts and spacing (e.g., REF has 1832 gates
+ * at 250m while RhoHV has 1192 gates at 250m starting further out, or 460 gates at 1km).
+ * This function maps each REF gate index to the corresponding RhoHV value by matching
+ * range (distance from radar).
+ */
+function buildRhoLookup(
+  refGateCount: number, refFirstGate: number, refGateSize: number,
+  rhoData: (number | null)[], rhoFirstGate: number, rhoGateSize: number,
+): (number | null)[] {
+  const lookup: (number | null)[] = new Array(refGateCount).fill(null);
+  for (let i = 0; i < refGateCount; i++) {
+    const range = refFirstGate + i * refGateSize;  // range in km
+    const rhoIdx = Math.round((range - rhoFirstGate) / rhoGateSize);
+    if (rhoIdx >= 0 && rhoIdx < rhoData.length) {
+      lookup[i] = rhoData[rhoIdx];
+    }
+  }
+  return lookup;
+}
+
+/**
  * Build a single RadialGate from a scan index at the current elevation.
  * Returns null if reflectivity data is missing for this scan.
  *
  * Gates with RhoHV < 0.9 are masked as NaN to filter out ground clutter,
  * anomalous propagation, biological targets (birds/insects), and wind farms.
+ *
+ * RhoHV is read from the per-radial message record (hdr.rho) which is always
+ * available when dual-pol data exists — unlike getHighresCorrelationCoefficient()
+ * which can fail when gate counts don't match REF.
  */
 function buildRadial(radar: Level2Radar, scanIndex: number): RadialGate | null {
   let reflData;
@@ -93,13 +120,14 @@ function buildRadial(radar: Level2Radar, scanIndex: number): RadialGate | null {
 
   const { gate_count, first_gate, gate_size, moment_data } = reflData;
 
-  // Try to get correlation coefficient (RhoHV) for clutter filtering
-  let rhoData: (number | null)[] | null = null;
-  try {
-    const rho = radar.getHighresCorrelationCoefficient(scanIndex);
-    if (rho?.moment_data) rhoData = rho.moment_data;
-  } catch {
-    // RhoHV not available — proceed without filtering
+  // Get RhoHV from the message record (per-radial, handles mismatched gate counts)
+  let rhoLookup: (number | null)[] | null = null;
+  const rhoBlock = (msgRecord as any).rho;
+  if (rhoBlock?.moment_data && rhoBlock.gate_count > 0) {
+    rhoLookup = buildRhoLookup(
+      gate_count, first_gate, gate_size,
+      rhoBlock.moment_data, rhoBlock.first_gate, rhoBlock.gate_size,
+    );
   }
 
   // Convert km → meters
@@ -115,9 +143,9 @@ function buildRadial(radar: Level2Radar, scanIndex: number): RadialGate | null {
       continue;
     }
 
-    // Filter by RhoHV if available — low RhoHV = non-meteorological target
-    if (rhoData) {
-      const rho = rhoData[i];
+    // Filter by RhoHV — low RhoHV = non-meteorological target
+    if (rhoLookup) {
+      const rho = rhoLookup[i];
       if (rho === null || rho === undefined || rho < RHOHV_THRESHOLD) {
         values[i] = NaN;
         continue;
