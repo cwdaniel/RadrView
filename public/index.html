@@ -1164,7 +1164,7 @@
     // Reload palette when user changes it
     document.getElementById('palette')?.addEventListener('change', () => {
       loadSweepPalette();
-      redrawAllSweeps();
+      requestSweepRedraw();
     });
 
     function resizeSweepCanvas() {
@@ -1199,16 +1199,25 @@
 
       state.wedges.push({ radials: decodedRadials });
 
-      // Redraw everything (handles pan/zoom alignment)
-      redrawAllSweeps();
+      // Redraw everything (throttled via rAF)
+      requestSweepRedraw();
+    }
+
+    let sweepRafPending = false;
+    function requestSweepRedraw() {
+      if (sweepRafPending) return;
+      sweepRafPending = true;
+      requestAnimationFrame(() => {
+        sweepRafPending = false;
+        redrawAllSweeps();
+      });
     }
 
     function redrawAllSweeps() {
       if (!sweepCtx || !sweepPaletteColors) return;
 
-      resizeSweepCanvas();
       sweepCtx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
-      sweepCtx.clearRect(0, 0, sweepCanvas.width, sweepCanvas.height);
+      sweepCtx.clearRect(0, 0, sweepCanvas.width / devicePixelRatio, sweepCanvas.height / devicePixelRatio);
 
       for (const [stationId, state] of sweepStates) {
         const center = map.latLngToContainerPoint([state.stationLat, state.stationLon]);
@@ -1285,8 +1294,9 @@
       sweepCtx.stroke();
     }
 
-    // Redraw on map interaction
-    map.on('move zoom viewreset resize', redrawAllSweeps);
+    // Redraw on map interaction (throttled via rAF)
+    map.on('move zoom viewreset', requestSweepRedraw);
+    window.addEventListener('resize', () => { resizeSweepCanvas(); requestSweepRedraw(); });
 
     // ── Health polling ──
     async function updateHealth() {
