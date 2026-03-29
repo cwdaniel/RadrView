@@ -11,9 +11,8 @@ import { createFramesRouter } from './frames.js';
 import { createHealthRouter } from './health.js';
 import { loadPalettes, getLUT, isTypedPalette, colorizeTilePng, colorizePrecipType, createPaletteRouter } from './palette.js';
 import { createMetricsRouter, recordCacheHit, recordCacheMiss, recordServeDuration } from './metrics.js';
-import { ScanStore } from '../nexrad/scan-store.js';
-import { NexradIngester } from '../nexrad/ingester.js';
 import { createNexradTileHandler } from './nexrad-tile.js';
+import { NexradScanProvider } from './nexrad-scan-provider.js';
 import { getAllStations } from '../nexrad/stations.js';
 import { ChunkPoller } from '../nexrad/chunk-poller.js';
 import { SweepManager } from '../nexrad/sweep-manager.js';
@@ -32,7 +31,7 @@ export function createApp(
   redis: Redis,
   options?: {
     nexradTileHandler?: (z: number, x: number, y: number) => Promise<Buffer | null>;
-    nexradIngester?: NexradIngester;
+    nexradScanProvider?: NexradScanProvider;
   }
 ): { app: ReturnType<typeof express> } {
   const app = express();
@@ -73,8 +72,10 @@ export function createApp(
   app.use(createMetricsRouter(redis));
 
   // NEXRAD station locations with status
-  app.get('/nexrad/stations', (_req, res) => {
-    const statuses = options?.nexradIngester?.getStationStatuses() ?? [];
+  app.get('/nexrad/stations', async (_req, res) => {
+    const statuses = options?.nexradScanProvider
+      ? await options.nexradScanProvider.getStationStatuses()
+      : [];
     const statusMap = new Map(statuses.map(s => [s.stationId, s]));
 
     res.json(getAllStations().map(s => {
@@ -204,39 +205,26 @@ if (isMainModule) {
   const redis = new Redis(config.redisUrl);
   const subscriber = new Redis(config.redisUrl);
 
-  // NEXRAD Level 2 ingester (runs in-process, shares memory with tile handler)
+  // NEXRAD Level 2 — reads pre-computed scans from Redis (ingester runs as separate container)
   let nexradTileHandler: ((z: number, x: number, y: number) => Promise<Buffer | null>) | undefined;
-  let nexradIngester: NexradIngester | undefined;
-  if (config.nexradEnabled) {
-    const scanStore = new ScanStore();
-    const stationIds = config.nexradStations === 'all'
-      ? undefined
-      : config.nexradStations.split(',').map(s => s.trim());
-    nexradIngester = new NexradIngester(redis, scanStore, stationIds);
-    nexradTileHandler = createNexradTileHandler(nexradIngester);
-
-    // Start ingester in background (don't await — it's a long-running loop)
-    nexradIngester.start().catch(err => {
-      logger.error({ err }, 'NEXRAD ingester failed');
-    });
-
-    logger.info({
-      stations: stationIds?.length ?? 'all',
-      zoomMin: config.nexradZoomMin,
-    }, 'NEXRAD Level 2 ingester started');
-  }
-
-  // Real-time sweep display
+  let nexradScanProvider: NexradScanProvider | undefined;
   let nexradWsHandler: NexradWebSocketHandler | undefined;
-  if (config.nexradEnabled && nexradIngester) {
+  if (config.nexradEnabled) {
+    nexradScanProvider = new NexradScanProvider(redis);
+    nexradTileHandler = createNexradTileHandler(nexradScanProvider);
+
+    // Real-time sweep display (chunk poller still runs in-process — it's lightweight)
     const chunkPoller = new ChunkPoller();
-    const sweepMgr = new SweepManager(chunkPoller, nexradIngester);
+    // SweepManager needs an ingester-like object but we don't have one in-process anymore.
+    // Pass null — the sweep manager just needs the chunk poller events.
+    const sweepMgr = new SweepManager(chunkPoller, null as any);
     nexradWsHandler = new NexradWebSocketHandler(sweepMgr);
     chunkPoller.start();
-    logger.info('NEXRAD sweep display enabled');
+
+    logger.info({ zoomMin: config.nexradZoomMin }, 'NEXRAD tile serving enabled (ingester runs separately)');
   }
 
-  const { app } = createApp(redis, { nexradTileHandler, nexradIngester });
+  const { app } = createApp(redis, { nexradTileHandler, nexradScanProvider });
   const httpServer = createServer(app);
 
   // WebSocket server for real-time frame notifications

@@ -232,6 +232,20 @@ services:
     depends_on:
       - redis
 
+  ingest-nexrad:
+    container_name: radrview-ingest-nexrad
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: ["node", "dist/nexrad/main.js"]
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - NEXRAD_STATIONS=all
+      - LOG_LEVEL=info
+    restart: unless-stopped
+    depends_on:
+      - redis
+
   redis:
     container_name: radrview-redis
     image: redis:7-alpine
