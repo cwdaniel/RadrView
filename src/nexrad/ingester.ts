@@ -80,7 +80,7 @@ export class NexradIngester {
   }
 
   private async pollAllStations(): Promise<void> {
-    const BATCH = 20;
+    const BATCH = 5;  // small batches to avoid starving the event loop
     let updated = 0;
     for (let i = 0; i < this.stationIds.length; i += BATCH) {
       if (!this.running) break;
@@ -89,6 +89,8 @@ export class NexradIngester {
       for (const r of results) {
         if (r.status === 'fulfilled' && r.value) updated++;
       }
+      // Yield to the event loop between batches so HTTP requests can be served
+      await new Promise(resolve => setImmediate(resolve));
     }
     if (updated > 0) {
       logger.info({ updated, total: this.stationIds.length, active: this.projectedScans.size }, 'NEXRAD poll cycle complete');
@@ -157,14 +159,17 @@ export class NexradIngester {
       if (!fileResp.ok) return false;
       const buf = Buffer.from(await fileResp.arrayBuffer());
 
-      // Parse
+      // Parse (CPU-heavy — bzip2 decompression + binary parsing)
       const scan = parseLevel2Reflectivity(buf);
       if (!scan) return false;
+
+      // Yield to event loop after CPU-heavy parsing
+      await new Promise(resolve => setImmediate(resolve));
 
       // Store raw scan
       this.scanStore.put(stationId, scan);
 
-      // Pre-project for tile rendering
+      // Pre-project for tile rendering (CPU-heavy — trig for 720 radials × 1832 gates)
       const station = getStation(stationId);
       if (station) {
         const projected = projectScan(station, scan);
