@@ -318,7 +318,7 @@
 
     .card-grid {
       display: grid;
-      grid-template-columns: repeat(4, 1fr);
+      grid-template-columns: repeat(3, 1fr);
       gap: 1px;
       background: var(--border);
       border: 1px solid var(--border);
@@ -629,8 +629,11 @@
   <div id="what">
     <div class="section">
       <p>
-        That is <strong>live radar data</strong> from 5 sources across 3 countries — ingested,
-        normalized, and served entirely by RadrView.
+        That is <strong>live radar data</strong> from multiple sources — ingested,
+        normalized, and served entirely by RadrView. At lower zoom levels you see
+        <strong>MRMS composite tiles</strong> (1 km, ~2 min updates). Zoom in to z8+
+        and RadrView switches to <strong>NEXRAD Level 2</strong> direct station data
+        at native 250 m resolution.
         <strong>Self-hosted. Open-source. No API keys. No vendor lock-in.</strong>
       </p>
       <div class="pills">
@@ -639,6 +642,8 @@
         <span class="pill">MIT License</span>
         <span class="pill">Docker-first</span>
         <span class="pill">Standard XYZ tiles</span>
+        <span class="pill">NEXRAD Level 2</span>
+        <span class="pill">250m resolution</span>
       </div>
     </div>
   </div>
@@ -654,7 +659,7 @@
         <div class="card">
           <div class="card-icon">🌍</div>
           <div class="card-title">Multi-source global radar</div>
-          <div class="card-desc">MRMS (CONUS, Alaska, Hawaii), DWD Germany, and Environment Canada — unified in one tile feed.</div>
+          <div class="card-desc">MRMS (CONUS, Alaska, Hawaii), DWD Germany, Environment Canada, and NEXRAD Level 2 — unified in one tile feed.</div>
         </div>
 
         <div class="card">
@@ -688,9 +693,15 @@
         </div>
 
         <div class="card">
-          <div class="card-icon">🚀</div>
-          <div class="card-title">GPU-accelerated upscaling</div>
-          <div class="card-desc">Optional Real-ESRGAN upscaler with NVIDIA CUDA support for sharper tiles at high zoom levels.</div>
+          <div class="card-icon">📡</div>
+          <div class="card-title">NEXRAD Level 2 · 250m</div>
+          <div class="card-desc">At zoom 8+, RadrView switches to direct WSR-88D station data from 159 NEXRAD sites at native 250 m gate spacing — no upscaling needed.</div>
+        </div>
+
+        <div class="card">
+          <div class="card-icon">🔄</div>
+          <div class="card-title">Real-time sweep display</div>
+          <div class="card-desc">For stations with live chunk data, a rotating sweep line and progressive 60° wedge render on a Canvas overlay as each radial arrives.</div>
         </div>
 
         <div class="card">
@@ -720,7 +731,7 @@
         </thead>
         <tbody>
           <tr>
-            <td class="region">North America</td>
+            <td class="region">North America (z2–z7)</td>
             <td class="sources">
               <span class="tag">MRMS CONUS</span>
               <span class="tag">MRMS Alaska</span>
@@ -728,7 +739,15 @@
               <span class="tag">Environment Canada</span>
             </td>
             <td>~1 km</td>
-            <td>2 min</td>
+            <td>~2 min</td>
+          </tr>
+          <tr>
+            <td class="region">North America (z8+)</td>
+            <td class="sources">
+              <span class="tag">NEXRAD Level 2</span>
+            </td>
+            <td>250 m</td>
+            <td>5–10 min (real-time sweep for ~7 live stations)</td>
           </tr>
           <tr>
             <td class="region">Europe</td>
