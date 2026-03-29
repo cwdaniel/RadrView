@@ -23,8 +23,8 @@ const POLL_INTERVAL_MS = 10_000;   // poll every 10 seconds
 const MAX_AGE_MS = 15 * 60 * 1000; // skip chunks older than 15 minutes
 const BATCH_SIZE = 10;              // stations polled in parallel
 
-const RHOHV_THRESHOLD = 0.8;
-const MIN_DBZ_THRESHOLD = 5;
+const RHOHV_THRESHOLD = 0.95;
+const MIN_DBZ_THRESHOLD = 10;
 
 export interface ChunkRadial {
   azimuth: number;        // degrees, clockwise from north

@@ -70,15 +70,16 @@ function extractVcp(radar: Level2Radar): number {
 }
 
 /** Minimum correlation coefficient to consider a gate as weather.
- *  Rain: RhoHV ~0.95-1.0. Snow/mixed: RhoHV ~0.8-0.95. Clutter/bio: RhoHV < 0.8.
- *  Threshold of 0.8 keeps snow/mixed precipitation while filtering clutter.
- *  Combined with MIN_DBZ_THRESHOLD, this removes biological returns effectively. */
-const RHOHV_THRESHOLD = 0.8;
+ *  Rain: RhoHV 0.97-1.0. Wet snow: 0.85-0.95. Dry snow: 0.95-1.0.
+ *  Bio (birds/insects): 0.3-0.9. Ground clutter: 0.6-0.95.
+ *  Threshold of 0.95 filters nearly all non-meteorological returns.
+ *  Some wet snow/mixed precip (0.85-0.95) is lost — acceptable tradeoff
+ *  since MRMS (z2-z7) shows those areas correctly at lower zoom. */
+const RHOHV_THRESHOLD = 0.95;
 
-/** Minimum dBZ to display. Combined with RhoHV >= 0.8, this removes residual noise.
- *  Light snow ~5 dBZ, light rain ~10 dBZ. Below 5 dBZ even with decent RhoHV is
- *  typically ground clutter in mountainous terrain or residual AP. */
-const MIN_DBZ_THRESHOLD = 5;
+/** Minimum dBZ to display. With RhoHV >= 0.95, most noise is already filtered.
+ *  This catches residual edge cases. Light rain ~10 dBZ, moderate ~25 dBZ. */
+const MIN_DBZ_THRESHOLD = 10;
 
 /**
  * Build a RhoHV lookup array aligned to reflectivity gates.
