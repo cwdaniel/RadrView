@@ -15,6 +15,9 @@ import { ScanStore } from '../nexrad/scan-store.js';
 import { NexradIngester } from '../nexrad/ingester.js';
 import { createNexradTileHandler } from './nexrad-tile.js';
 import { getAllStations } from '../nexrad/stations.js';
+import { ChunkPoller } from '../nexrad/chunk-poller.js';
+import { SweepManager } from '../nexrad/sweep-manager.js';
+import { NexradWebSocketHandler } from './nexrad-ws.js';
 
 const logger = createLogger('server');
 
@@ -223,6 +226,16 @@ if (isMainModule) {
     }, 'NEXRAD Level 2 ingester started');
   }
 
+  // Real-time sweep display
+  let nexradWsHandler: NexradWebSocketHandler | undefined;
+  if (config.nexradEnabled && nexradIngester) {
+    const chunkPoller = new ChunkPoller();
+    const sweepMgr = new SweepManager(chunkPoller, nexradIngester);
+    nexradWsHandler = new NexradWebSocketHandler(sweepMgr);
+    chunkPoller.start();
+    logger.info('NEXRAD sweep display enabled');
+  }
+
   const { app } = createApp(redis, { nexradTileHandler, nexradIngester });
   const httpServer = createServer(app);
 
@@ -231,6 +244,9 @@ if (isMainModule) {
 
   wss.on('connection', (ws) => {
     logger.info({ clients: wss.clients.size }, 'WebSocket client connected');
+    if (nexradWsHandler) {
+      nexradWsHandler.addClient(ws);
+    }
     ws.on('close', () => {
       logger.debug({ clients: wss.clients.size }, 'WebSocket client disconnected');
     });
