@@ -618,6 +618,7 @@
   <!-- Main -->
   <div class="main">
     <div id="map"></div>
+    <canvas id="sweep-canvas" style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:500;"></canvas>
 
     <!-- Right Sidebar -->
     <aside class="sidebar">
@@ -1066,12 +1067,15 @@
 
     // ── WebSocket ──
     const liveDot = document.getElementById('live-dot');
+    let sweepWs = null;
     function connectWebSocket() {
       const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
       const ws = new WebSocket(`${wsProto}//${location.host}/ws`);
+      sweepWs = ws;
       ws.onopen = () => {
         liveDot.classList.add('connected');
         liveDot.title = 'Connected';
+        sendViewport();
       };
       ws.onmessage = (event) => {
         try {
@@ -1083,15 +1087,204 @@
             addRadarLayer();
             loadFrames();
           }
+          if (msg.type === 'sweep-wedge') {
+            handleSweepWedge(msg);
+          }
         } catch (e) { /* ignore parse errors */ }
       };
       ws.onclose = () => {
+        sweepWs = null;
         liveDot.classList.remove('connected');
         liveDot.title = 'Disconnected';
         setTimeout(connectWebSocket, 5000);
       };
       ws.onerror = () => ws.close();
     }
+
+    function sendViewport() {
+      if (!sweepWs || sweepWs.readyState !== 1) return;
+      const bounds = map.getBounds();
+      sweepWs.send(JSON.stringify({
+        type: 'viewport',
+        west: bounds.getWest(),
+        south: bounds.getSouth(),
+        east: bounds.getEast(),
+        north: bounds.getNorth(),
+        zoom: map.getZoom(),
+      }));
+    }
+    map.on('moveend', sendViewport);
+
+    // ── Sweep Display ──
+    const sweepCanvas = document.getElementById('sweep-canvas');
+    const sweepCtx = sweepCanvas ? sweepCanvas.getContext('2d') : null;
+
+    // Per-station sweep state: stationId → { volumeId, wedges: [...], stationLat, stationLon }
+    const sweepStates = new Map();
+
+    // Palette colors for canvas rendering (pixel value → rgba string)
+    let sweepPaletteColors = null;
+
+    async function loadSweepPalette() {
+      try {
+        const name = document.getElementById('palette')?.value || 'dark';
+        const resp = await fetch('/palette/' + name + '/legend');
+        const legend = await resp.json();
+        // Build 256-entry color array from legend stops
+        const colors = new Array(256).fill(null);
+        colors[0] = null; // transparent
+        if (legend.stops) {
+          for (let px = 1; px <= 255; px++) {
+            // Find bracketing stops
+            let lo = legend.stops[0], hi = legend.stops[legend.stops.length - 1];
+            for (let i = 0; i < legend.stops.length - 1; i++) {
+              if (px >= legend.stops[i].pixel && px <= legend.stops[i + 1].pixel) {
+                lo = legend.stops[i];
+                hi = legend.stops[i + 1];
+                break;
+              }
+            }
+            const t = hi.pixel === lo.pixel ? 0 : (px - lo.pixel) / (hi.pixel - lo.pixel);
+            const r = Math.round(lo.r + t * (hi.r - lo.r));
+            const g = Math.round(lo.g + t * (hi.g - lo.g));
+            const b = Math.round(lo.b + t * (hi.b - lo.b));
+            const a = Math.round(lo.a + t * (hi.a - lo.a));
+            colors[px] = `rgba(${r},${g},${b},${a / 255})`;
+          }
+        }
+        sweepPaletteColors = colors;
+      } catch (e) {
+        console.warn('Failed to load sweep palette:', e);
+      }
+    }
+    loadSweepPalette();
+
+    // Reload palette when user changes it
+    document.getElementById('palette')?.addEventListener('change', () => {
+      loadSweepPalette();
+      redrawAllSweeps();
+    });
+
+    function resizeSweepCanvas() {
+      if (!sweepCanvas) return;
+      const container = document.getElementById('map');
+      if (!container) return;
+      const rect = container.getBoundingClientRect();
+      sweepCanvas.width = rect.width * devicePixelRatio;
+      sweepCanvas.height = rect.height * devicePixelRatio;
+      sweepCanvas.style.width = rect.width + 'px';
+      sweepCanvas.style.height = rect.height + 'px';
+    }
+    resizeSweepCanvas();
+
+    function handleSweepWedge(msg) {
+      if (!sweepCtx || !sweepPaletteColors) return;
+
+      const { stationId, stationLat, stationLon, volumeId, radials } = msg;
+
+      // Get or create station state
+      let state = sweepStates.get(stationId);
+      if (!state || state.volumeId !== volumeId) {
+        state = { volumeId, wedges: [], stationLat, stationLon };
+        sweepStates.set(stationId, state);
+      }
+
+      // Decode base64 gatePixels
+      const decodedRadials = radials.map(r => ({
+        ...r,
+        gatePixels: Uint8Array.from(atob(r.gatePixels), c => c.charCodeAt(0)),
+      }));
+
+      state.wedges.push({ radials: decodedRadials });
+
+      // Redraw everything (handles pan/zoom alignment)
+      redrawAllSweeps();
+    }
+
+    function redrawAllSweeps() {
+      if (!sweepCtx || !sweepPaletteColors) return;
+
+      resizeSweepCanvas();
+      sweepCtx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+      sweepCtx.clearRect(0, 0, sweepCanvas.width, sweepCanvas.height);
+
+      for (const [stationId, state] of sweepStates) {
+        const center = map.latLngToContainerPoint([state.stationLat, state.stationLon]);
+
+        // Meters per pixel at current map zoom/lat
+        const zoom = map.getZoom();
+        const metersPerPx = 40075016.686 * Math.cos(state.stationLat * Math.PI / 180)
+          / (256 * Math.pow(2, zoom));
+
+        // Draw all received wedges
+        let lastAz = 0;
+        for (const wedge of state.wedges) {
+          for (const radial of wedge.radials) {
+            drawRadial(center, radial, metersPerPx);
+            lastAz = radial.azimuth;
+          }
+        }
+
+        // Draw sweep line at the leading edge
+        drawSweepLine(center, lastAz, metersPerPx);
+      }
+    }
+
+    function drawRadial(center, radial, metersPerPx) {
+      const { azimuth, gatePixels, firstGateRange, gateSpacing, gateCount } = radial;
+
+      // Canvas angle: 0=right, but radar azimuth 0=north clockwise
+      // Convert: canvasAngle = (azimuth - 90) in degrees
+      const azRad = (azimuth - 90) * Math.PI / 180;
+      const halfBeam = 0.3 * Math.PI / 180; // slightly wider than 0.25° to avoid gaps
+
+      // Batch consecutive gates with the same color for performance
+      let runStart = -1;
+      let runColor = null;
+
+      for (let g = 0; g <= gateCount; g++) {
+        const px = g < gateCount ? gatePixels[g] : 0;
+        const color = px > 0 ? sweepPaletteColors[px] : null;
+
+        if (color === runColor && g < gateCount) continue;
+
+        // Flush the current run
+        if (runColor && runStart >= 0) {
+          const innerR = (firstGateRange + runStart * gateSpacing) / metersPerPx;
+          const outerR = (firstGateRange + g * gateSpacing) / metersPerPx;
+
+          if (outerR > 1) { // skip sub-pixel arcs
+            sweepCtx.beginPath();
+            sweepCtx.arc(center.x, center.y, innerR, azRad - halfBeam, azRad + halfBeam);
+            sweepCtx.arc(center.x, center.y, outerR, azRad + halfBeam, azRad - halfBeam, true);
+            sweepCtx.closePath();
+            sweepCtx.fillStyle = runColor;
+            sweepCtx.fill();
+          }
+        }
+
+        runStart = g;
+        runColor = color;
+      }
+    }
+
+    function drawSweepLine(center, azimuthDeg, metersPerPx) {
+      const maxRangePx = 460000 / metersPerPx;
+      const azRad = (azimuthDeg - 90) * Math.PI / 180;
+
+      sweepCtx.beginPath();
+      sweepCtx.moveTo(center.x, center.y);
+      sweepCtx.lineTo(
+        center.x + Math.cos(azRad) * Math.min(maxRangePx, 4000),
+        center.y + Math.sin(azRad) * Math.min(maxRangePx, 4000)
+      );
+      sweepCtx.strokeStyle = 'rgba(91, 155, 213, 0.5)';
+      sweepCtx.lineWidth = 1.5;
+      sweepCtx.stroke();
+    }
+
+    // Redraw on map interaction
+    map.on('move zoom viewreset resize', redrawAllSweeps);
 
     // ── Health polling ──
     async function updateHealth() {
