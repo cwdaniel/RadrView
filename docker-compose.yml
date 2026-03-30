@@ -1,0 +1,275 @@
+name: radrview
+
+services:
+  server:
+    build: .
+    container_name: radrview
+    command: ["node", "dist/server/index.js"]
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - radrview-data:/data
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - DATA_DIR=/data
+      - PORT=8600
+      - LOG_LEVEL=info
+      - NEXRAD_ENABLED=true
+      - NEXRAD_STATIONS=all
+      - NEXRAD_ZOOM_MIN=8
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.radrview.rule=Host(`radrview.com`) || Host(`www.radrview.com`)"
+      - "traefik.http.routers.radrview.entrypoints=websecure"
+      - "traefik.http.routers.radrview.tls.certresolver=letsencrypt"
+      - "traefik.http.services.radrview.loadbalancer.server.port=8600"
+    networks:
+      - proxy
+      - internal
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:7-alpine
+    container_name: radrview-redis
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    networks:
+      - internal
+
+  ingest-mrms:
+    build: .
+    container_name: radrview-ingest-mrms
+    command: ["node", "dist/ingest/mrms.js"]
+    restart: unless-stopped
+    volumes:
+      - radrview-data:/data
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - DATA_DIR=/data
+      - LOG_LEVEL=info
+      - POLL_INTERVAL_MS=30000
+      - MRMS_REGION=conus
+    networks:
+      - internal
+    depends_on:
+      - redis
+
+  ingest-mrms-alaska:
+    build: .
+    container_name: radrview-ingest-alaska
+    command: ["node", "dist/ingest/mrms.js"]
+    restart: unless-stopped
+    volumes:
+      - radrview-data:/data
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - DATA_DIR=/data
+      - LOG_LEVEL=info
+      - MRMS_REGION=alaska
+    networks:
+      - internal
+    depends_on:
+      - redis
+
+  ingest-mrms-hawaii:
+    build: .
+    container_name: radrview-ingest-hawaii
+    command: ["node", "dist/ingest/mrms.js"]
+    restart: unless-stopped
+    volumes:
+      - radrview-data:/data
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - DATA_DIR=/data
+      - LOG_LEVEL=info
+      - MRMS_REGION=hawaii
+    networks:
+      - internal
+    depends_on:
+      - redis
+
+  ingest-mrms-type:
+    build: .
+    container_name: radrview-ingest-mrms-type
+    command: ["node", "dist/ingest/mrms.js"]
+    restart: unless-stopped
+    volumes:
+      - radrview-data:/data
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - DATA_DIR=/data
+      - LOG_LEVEL=info
+      - MRMS_REGION=conus
+      - MRMS_PRODUCT=type
+    networks:
+      - internal
+    depends_on:
+      - redis
+
+  ingest-mrms-alaska-type:
+    build: .
+    container_name: radrview-ingest-mrms-alaska-type
+    command: ["node", "dist/ingest/mrms.js"]
+    restart: unless-stopped
+    volumes:
+      - radrview-data:/data
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - DATA_DIR=/data
+      - LOG_LEVEL=info
+      - MRMS_REGION=alaska
+      - MRMS_PRODUCT=type
+    networks:
+      - internal
+    depends_on:
+      - redis
+
+  ingest-mrms-hawaii-type:
+    build: .
+    container_name: radrview-ingest-mrms-hawaii-type
+    command: ["node", "dist/ingest/mrms.js"]
+    restart: unless-stopped
+    volumes:
+      - radrview-data:/data
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - DATA_DIR=/data
+      - LOG_LEVEL=info
+      - MRMS_REGION=hawaii
+      - MRMS_PRODUCT=type
+    networks:
+      - internal
+    depends_on:
+      - redis
+
+  ingest-canada:
+    build: .
+    container_name: radrview-ingest-canada
+    command: ["node", "dist/ingest/ec.js"]
+    restart: unless-stopped
+    volumes:
+      - radrview-data:/data
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - DATA_DIR=/data
+      - LOG_LEVEL=info
+    networks:
+      - internal
+    depends_on:
+      - redis
+
+  ingest-dwd:
+    build: .
+    container_name: radrview-ingest-dwd
+    command: ["node", "dist/ingest/dwd.js"]
+    restart: unless-stopped
+    volumes:
+      - radrview-data:/data
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - DATA_DIR=/data
+      - LOG_LEVEL=info
+    networks:
+      - internal
+    depends_on:
+      - redis
+
+  ingest-nexrad:
+    build: .
+    container_name: radrview-ingest-nexrad
+    command: ["node", "dist/nexrad/main.js"]
+    restart: unless-stopped
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - NEXRAD_STATIONS=all
+      - LOG_LEVEL=info
+    networks:
+      - internal
+    depends_on:
+      - redis
+
+  tiler-1:
+    build: .
+    container_name: radrview-tiler-1
+    command: ["node", "dist/pipeline/tiler.js"]
+    restart: unless-stopped
+    volumes:
+      - radrview-data:/data
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - DATA_DIR=/data
+      - ZOOM_MIN=2
+      - ZOOM_MAX=7
+      - LOG_LEVEL=info
+    networks:
+      - internal
+    depends_on:
+      - redis
+
+  tiler-2:
+    build: .
+    container_name: radrview-tiler-2
+    command: ["node", "dist/pipeline/tiler.js"]
+    restart: unless-stopped
+    volumes:
+      - radrview-data:/data
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - DATA_DIR=/data
+      - ZOOM_MIN=2
+      - ZOOM_MAX=7
+      - LOG_LEVEL=info
+    networks:
+      - internal
+    depends_on:
+      - redis
+
+  compositor:
+    build: .
+    container_name: radrview-compositor
+    command: ["node", "dist/pipeline/compositor.js"]
+    restart: unless-stopped
+    volumes:
+      - radrview-data:/data
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - DATA_DIR=/data
+      - ZOOM_MIN=2
+      - ZOOM_MAX=7
+      - LOG_LEVEL=info
+    networks:
+      - internal
+    depends_on:
+      - redis
+
+  cleanup:
+    build: .
+    container_name: radrview-cleanup
+    command: ["node", "dist/pipeline/cleanup.js"]
+    restart: unless-stopped
+    volumes:
+      - radrview-data:/data
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - DATA_DIR=/data
+      - RETENTION_HOURS=24
+      - LOG_LEVEL=info
+    networks:
+      - internal
+    depends_on:
+      - redis
+
+volumes:
+  radrview-data:
+    driver: local
+  redis-data:
+    driver: local
+
+networks:
+  proxy:
+    external: true
+  internal:
+    driver: bridge
