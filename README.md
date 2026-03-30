@@ -2,7 +2,7 @@
 
 Self-hosted, real-time weather radar with direct NEXRAD Level 2 station access. No API keys. No vendor lock-in.
 
-**[Live Demo](http://localhost:8600)** | **[Documentation](docs/README.md)** | **[Donate](https://donate.stripe.com/3cI3cv9Vpew2fhf1AUcfK00)**
+**[Live Demo](https://radrview.com)** | **[Documentation](docs/README.md)** | **[Donate](https://donate.stripe.com/3cI3cv9Vpew2fhf1AUcfK00)**
 
 ## What it does
 
@@ -26,7 +26,7 @@ cd RadrView
 docker compose -f docker/docker-compose.yml up -d
 ```
 
-Open **http://localhost:8600** — radar data appears within 60 seconds. NEXRAD Level 2 data loads within 5 minutes.
+Open **https://radrview.com** (or `http://localhost:8600` for local dev) — radar data appears within 60 seconds. NEXRAD Level 2 data loads within 5 minutes.
 
 ## Architecture
 

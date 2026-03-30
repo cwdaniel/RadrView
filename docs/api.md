@@ -356,7 +356,7 @@ Connect to receive real-time notifications when new radar frames are available a
 
 **Connection:**
 ```
-ws://localhost:8600/ws
+wss://radrview.com/ws
 ```
 
 **Outgoing messages (client → server):**
@@ -413,7 +413,7 @@ The server only broadcasts `new-frame` events for the main `composite` source. C
 
 **Example (browser):**
 ```javascript
-const ws = new WebSocket('ws://localhost:8600/ws');
+const ws = new WebSocket('wss://radrview.com/ws');
 
 ws.onopen = () => {
   // Subscribe to sweeps for the current map viewport
@@ -442,12 +442,12 @@ The WebSocket connection has no heartbeat. Clients should implement reconnection
 For use with mapping libraries (Leaflet, MapLibre, OpenLayers):
 
 ```
-http://localhost:8600/tile/{timestamp}/{z}/{x}/{y}?palette=default&source=composite
+https://radrview.com/tile/{timestamp}/{z}/{x}/{y}?palette=default&source=composite
 ```
 
 **Leaflet example:**
 ```javascript
-L.tileLayer('http://localhost:8600/tile/20260322143000/{z}/{x}/{y}?palette=dark', {
+L.tileLayer('https://radrview.com/tile/20260322143000/{z}/{x}/{y}?palette=dark', {
   opacity: 0.7,
   tms: false,
 }).addTo(map);
@@ -457,7 +457,7 @@ L.tileLayer('http://localhost:8600/tile/20260322143000/{z}/{x}/{y}?palette=dark'
 ```json
 {
   "type": "raster",
-  "tiles": ["http://localhost:8600/tile/20260322143000/{z}/{x}/{y}?palette=default"],
+  "tiles": ["https://radrview.com/tile/20260322143000/{z}/{x}/{y}?palette=default"],
   "tileSize": 256
 }
 ```

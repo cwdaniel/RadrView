@@ -54,7 +54,7 @@ This starts the following containers:
 ### 4. Open the viewer
 
 ```
-http://localhost:8600
+https://radrview.com
 ```
 
 MRMS data starts flowing within 30–60 seconds. NEXRAD Level 2 data is automatically enabled — no additional setup or API keys required. The ingester polls the public `unidata-nexrad-level2` S3 bucket and begins serving 250 m tiles at zoom 8+ as volume scans become available (~5–10 minutes per station on startup). Station markers on the map show live status in green (active), orange (stale), or red (unavailable).
@@ -64,7 +64,7 @@ MRMS data starts flowing within 30–60 seconds. NEXRAD Level 2 data is automati
 Check the health endpoint:
 
 ```bash
-curl http://localhost:8600/health
+curl https://radrview.com/health
 ```
 
 A healthy response looks like:
@@ -83,7 +83,7 @@ A healthy response looks like:
 Check available frames:
 
 ```bash
-curl "http://localhost:8600/frames?source=composite&limit=5"
+curl "https://radrview.com/frames?source=composite&limit=5"
 ```
 
 ## Stopping

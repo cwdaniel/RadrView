@@ -216,13 +216,13 @@ redis-cli ZCARD frames:my-source
 redis-cli GET latest:my-source
 
 # Check health endpoint
-curl http://localhost:8600/health | jq .sources."my-source"
+curl https://radrview.com/health | jq .sources."my-source"
 
 # Fetch a tile
-curl -o /tmp/test.png "http://localhost:8600/tile/$(redis-cli GET latest:composite)/6/14/26?source=composite"
+curl -o /tmp/test.png "https://radrview.com/tile/$(redis-cli GET latest:composite)/6/14/26?source=composite"
 ```
 
-**Check tile coverage:** The built-in viewer at `http://localhost:8600` shows all sources overlaid. Navigate to your source's geographic coverage area to verify tiles appear correctly.
+**Check tile coverage:** The built-in viewer at `https://radrview.com` shows all sources overlaid. Navigate to your source's geographic coverage area to verify tiles appear correctly.
 
 ---
 

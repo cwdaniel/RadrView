@@ -13,7 +13,7 @@ How did you verify this works?
 - [ ] `npx tsc --noEmit` passes
 - [ ] Docker builds successfully
 - [ ] Tested locally with `docker compose up`
-- [ ] Verified in browser at localhost:8600
+- [ ] Verified in browser at radrview.com
 
 ## Screenshots
 

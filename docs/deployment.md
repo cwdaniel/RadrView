@@ -18,7 +18,7 @@ server {
 
     # Tile endpoint — cache aggressively (server sets immutable for historical frames)
     location /tile/ {
-        proxy_pass http://localhost:8600;
+        proxy_pass https://radrview.com;
         proxy_set_header Host $host;
         proxy_cache radar_cache;
         proxy_cache_valid 200 1d;
@@ -28,19 +28,19 @@ server {
 
     # API endpoints — short cache or no cache
     location /frames {
-        proxy_pass http://localhost:8600;
+        proxy_pass https://radrview.com;
         proxy_set_header Host $host;
         proxy_cache_bypass 1;
     }
 
     location /health {
-        proxy_pass http://localhost:8600;
+        proxy_pass https://radrview.com;
         proxy_cache_bypass 1;
     }
 
     # WebSocket
     location /ws {
-        proxy_pass http://localhost:8600;
+        proxy_pass https://radrview.com;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
@@ -49,7 +49,7 @@ server {
     }
 
     location / {
-        proxy_pass http://localhost:8600;
+        proxy_pass https://radrview.com;
         proxy_set_header Host $host;
     }
 }
