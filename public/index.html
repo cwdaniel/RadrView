@@ -629,6 +629,16 @@
         <select id="palette"></select>
       </div>
 
+      <!-- Layer -->
+      <div class="sidebar-section">
+        <div class="sidebar-label">Layer</div>
+        <select id="layer">
+          <option value="reflectivity" selected>Reflectivity</option>
+          <option value="velocity">Velocity (Wind)</option>
+          <option value="biological">Biological</option>
+        </select>
+      </div>
+
       <!-- Source -->
       <div class="sidebar-section">
         <div class="sidebar-label">Source</div>
@@ -845,7 +855,9 @@
     function makeLayer(timestamp) {
       const palette = document.getElementById('palette').value;
       const source = document.getElementById('source').value;
-      return L.tileLayer(`${API}/tile/${timestamp}/{z}/{x}/{y}?palette=${palette}&source=${source}`, {
+      const layer = document.getElementById('layer').value;
+      const layerParam = layer !== 'reflectivity' ? `&layer=${layer}` : '';
+      return L.tileLayer(`${API}/tile/${timestamp}/{z}/{x}/{y}?palette=${palette}&source=${source}${layerParam}`, {
         opacity: 0,
         maxNativeZoom: 12,
         maxZoom: 18,
@@ -1056,6 +1068,22 @@
 
     // ── Controls ──
     document.getElementById('palette').addEventListener('change', () => { addRadarLayer(); });
+    document.getElementById('layer').addEventListener('change', () => {
+      const layer = document.getElementById('layer').value;
+      const paletteEl = document.getElementById('palette');
+      // Auto-switch palette to match layer
+      if (layer === 'velocity' && paletteEl.querySelector('option[value="velocity"]')) {
+        paletteEl.value = 'velocity';
+      } else if (layer === 'biological' && paletteEl.querySelector('option[value="biological"]')) {
+        paletteEl.value = 'biological';
+      } else if (layer === 'reflectivity') {
+        if (paletteEl.value === 'velocity' || paletteEl.value === 'biological') {
+          paletteEl.value = 'dark';
+        }
+      }
+      addRadarLayer();
+      loadSweepPalette();
+    });
     document.getElementById('source').addEventListener('change', () => {
       stopPlayback();
       liveMode = true;
