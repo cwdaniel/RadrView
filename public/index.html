@@ -1339,8 +1339,12 @@
     let windAnimFrame = null;
     let windEnabled = false;
     const PARTICLE_COUNT = 15000;
-    const TRAIL_LENGTH = 20;
-    const SPEED_SCALE = 0.15;
+    const TRAIL_LENGTH = 25;
+    // At 60fps, 10 m/s wind should move ~10m per frame in real space.
+    // 10m = 0.00009° of latitude. So scale = 0.00009 / 10 = 0.000009 degrees per m/s per frame.
+    // But that would be invisible. Weather viz exaggerates by ~500x for visual flow.
+    // 0.000009 * 500 = 0.0045 degrees per m/s per frame
+    const SPEED_SCALE = 0.004;
 
     // Wind speed color LUT — subtle white-to-light-blue palette
     const windColors = [];
@@ -1417,7 +1421,7 @@
     }
 
     function animateWind() {
-      if (!windEnabled || !windCtx || !windGrid) return;
+      if (!windEnabled || !windCtx || !windGrid || windPaused) return;
 
       // Resize canvas if needed
       const container = document.getElementById('map');
@@ -1465,20 +1469,20 @@
         p.lon += (wind.u * SPEED_SCALE) / Math.max(cosLat, 0.1);
         p.lat += wind.v * SPEED_SCALE;
 
-        // Store trail point
-        const screenPt = map.latLngToContainerPoint([p.lat, p.lon]);
-        p.trail.push({ x: screenPt.x, y: screenPt.y, speed });
+        // Store trail in lat/lon (not screen coords — survives pan/zoom)
+        p.trail.push({ lon: p.lon, lat: p.lat, speed });
         if (p.trail.length > TRAIL_LENGTH) p.trail.shift();
 
-        // Draw trail
+        // Draw trail by converting each point to screen coords at draw time
         if (p.trail.length > 1) {
-          // Color based on speed (0-25 m/s mapped to 0-255)
           const colorIdx = Math.min(255, Math.floor(speed / 25 * 255));
           windCtx.strokeStyle = windColors[colorIdx];
           windCtx.beginPath();
-          windCtx.moveTo(p.trail[0].x, p.trail[0].y);
+          const p0 = map.latLngToContainerPoint([p.trail[0].lat, p.trail[0].lon]);
+          windCtx.moveTo(p0.x, p0.y);
           for (let t = 1; t < p.trail.length; t++) {
-            windCtx.lineTo(p.trail[t].x, p.trail[t].y);
+            const pt = map.latLngToContainerPoint([p.trail[t].lat, p.trail[t].lon]);
+            windCtx.lineTo(pt.x, pt.y);
           }
           windCtx.stroke();
         }
@@ -1487,11 +1491,15 @@
       windAnimFrame = requestAnimationFrame(animateWind);
     }
 
-    // Clear trails on map move (they'd be in wrong positions)
-    map.on('movestart', () => {
-      if (windEnabled) {
-        windParticles.forEach(p => { p.trail = []; });
-      }
+    // Pause animation during map interaction to avoid jank
+    let windPaused = false;
+    map.on('movestart zoomstart', () => {
+      windPaused = true;
+      if (windAnimFrame) { cancelAnimationFrame(windAnimFrame); windAnimFrame = null; }
+    });
+    map.on('moveend zoomend', () => {
+      windPaused = false;
+      if (windEnabled && !windAnimFrame) animateWind();
     });
 
     document.getElementById('show-wind')?.addEventListener('change', function() {
