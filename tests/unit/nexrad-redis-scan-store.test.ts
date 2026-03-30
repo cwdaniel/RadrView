@@ -133,7 +133,7 @@ describe('nexrad/redis-scan-store', () => {
       const scan = createMockPreparedScan();
       await writeScanToRedis(redis, scan);
 
-      expect(redis.expire).toHaveBeenCalledWith('nexrad:scan:KTLX', 600);
+      expect(redis.expire).toHaveBeenCalledWith('nexrad:scan:KTLX', 1800);
     });
 
     it('adds station to active set', async () => {
