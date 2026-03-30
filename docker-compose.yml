@@ -2,11 +2,12 @@ name: radrview
 
 services:
   server:
-    build: .
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
     container_name: radrview
     command: ["node", "dist/server/index.js"]
     restart: unless-stopped
-    env_file: .env
     volumes:
       - radrview-data:/data
     environment:
@@ -40,7 +41,9 @@ services:
       - internal
 
   ingest-mrms:
-    build: .
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
     container_name: radrview-ingest-mrms
     command: ["node", "dist/ingest/mrms.js"]
     restart: unless-stopped
@@ -58,7 +61,9 @@ services:
       - redis
 
   ingest-mrms-alaska:
-    build: .
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
     container_name: radrview-ingest-alaska
     command: ["node", "dist/ingest/mrms.js"]
     restart: unless-stopped
@@ -75,7 +80,9 @@ services:
       - redis
 
   ingest-mrms-hawaii:
-    build: .
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
     container_name: radrview-ingest-hawaii
     command: ["node", "dist/ingest/mrms.js"]
     restart: unless-stopped
@@ -92,7 +99,9 @@ services:
       - redis
 
   ingest-mrms-type:
-    build: .
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
     container_name: radrview-ingest-mrms-type
     command: ["node", "dist/ingest/mrms.js"]
     restart: unless-stopped
@@ -110,7 +119,9 @@ services:
       - redis
 
   ingest-mrms-alaska-type:
-    build: .
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
     container_name: radrview-ingest-mrms-alaska-type
     command: ["node", "dist/ingest/mrms.js"]
     restart: unless-stopped
@@ -128,7 +139,9 @@ services:
       - redis
 
   ingest-mrms-hawaii-type:
-    build: .
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
     container_name: radrview-ingest-mrms-hawaii-type
     command: ["node", "dist/ingest/mrms.js"]
     restart: unless-stopped
@@ -146,7 +159,9 @@ services:
       - redis
 
   ingest-canada:
-    build: .
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
     container_name: radrview-ingest-canada
     command: ["node", "dist/ingest/ec.js"]
     restart: unless-stopped
@@ -162,7 +177,9 @@ services:
       - redis
 
   ingest-dwd:
-    build: .
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
     container_name: radrview-ingest-dwd
     command: ["node", "dist/ingest/dwd.js"]
     restart: unless-stopped
@@ -178,7 +195,9 @@ services:
       - redis
 
   ingest-nexrad:
-    build: .
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
     container_name: radrview-ingest-nexrad
     command: ["node", "dist/nexrad/main.js"]
     restart: unless-stopped
@@ -192,7 +211,9 @@ services:
       - redis
 
   tiler-1:
-    build: .
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
     container_name: radrview-tiler-1
     command: ["node", "dist/pipeline/tiler.js"]
     restart: unless-stopped
@@ -210,7 +231,9 @@ services:
       - redis
 
   tiler-2:
-    build: .
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
     container_name: radrview-tiler-2
     command: ["node", "dist/pipeline/tiler.js"]
     restart: unless-stopped
@@ -228,7 +251,9 @@ services:
       - redis
 
   compositor:
-    build: .
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
     container_name: radrview-compositor
     command: ["node", "dist/pipeline/compositor.js"]
     restart: unless-stopped
@@ -246,7 +271,9 @@ services:
       - redis
 
   cleanup:
-    build: .
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
     container_name: radrview-cleanup
     command: ["node", "dist/pipeline/cleanup.js"]
     restart: unless-stopped
