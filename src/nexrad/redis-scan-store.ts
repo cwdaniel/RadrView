@@ -20,7 +20,7 @@ const logger = createLogger('redis-scan-store');
 const SCAN_KEY_PREFIX = 'nexrad:scan:';
 const STATUS_KEY_PREFIX = 'nexrad:status:';
 const STATIONS_KEY = 'nexrad:active-stations';
-const SCAN_TTL = 600;  // 10 minutes
+const SCAN_TTL = 1800;  // 30 minutes (scans update every ~7 min, TTL covers gaps)
 
 export interface RedisStationStatus {
   stationId: string;
@@ -87,6 +87,12 @@ export async function writeStatusToRedis(redis: Redis, status: RedisStationStatu
     ageMinutes: String(status.ageMinutes ?? ''),
   });
   await redis.expire(key, SCAN_TTL);
+}
+
+/** Refresh TTL on scan and status keys without rewriting data (called when data hasn't changed) */
+export async function refreshScanTTL(redis: Redis, stationId: string): Promise<void> {
+  await redis.expire(SCAN_KEY_PREFIX + stationId, SCAN_TTL);
+  await redis.expire(STATUS_KEY_PREFIX + stationId, SCAN_TTL);
 }
 
 /** Read a PreparedScan from Redis (called by the server process) */

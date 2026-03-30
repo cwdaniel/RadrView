@@ -12,7 +12,7 @@ import { createLogger } from '../utils/logger.js';
 import { getAllStations, getStation } from './stations.js';
 import { parseLevel2Reflectivity } from './parser.js';
 import { projectScan } from './projector.js';
-import { writeScanToRedis, writeStatusToRedis } from './redis-scan-store.js';
+import { writeScanToRedis, writeStatusToRedis, refreshScanTTL } from './redis-scan-store.js';
 import { config } from '../config/env.js';
 
 const logger = createLogger('nexrad-ingester');
@@ -70,7 +70,8 @@ async function fetchLatest(redis: Redis, stationId: string): Promise<boolean> {
     }
 
     if (latestVolume.get(stationId) === latest.Key) {
-      // Data hasn't changed but refresh the status TTL so it doesn't expire
+      // Data hasn't changed — refresh TTLs so keys don't expire
+      await refreshScanTTL(redis, stationId);
       await writeStatusToRedis(redis, {
         stationId, status: 'active', lastDataTime: fileTime, ageMinutes,
       });
