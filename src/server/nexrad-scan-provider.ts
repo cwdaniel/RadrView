@@ -17,8 +17,8 @@ const logger = createLogger('scan-provider');
 
 export class NexradScanProvider {
   private redis: Redis;
-  private scanCache = new LRUCache<string, PreparedScan>({ max: 200, ttl: 30_000 });
-  private missCache = new LRUCache<string, true>({ max: 200, ttl: 30_000 });
+  private scanCache = new LRUCache<string, PreparedScan>({ max: 200, ttl: 60_000 });
+  private missCache = new LRUCache<string, true>({ max: 200, ttl: 5_000 });
   private activeStations: Set<string> = new Set();
   private refreshTimer: NodeJS.Timeout | null = null;
 
