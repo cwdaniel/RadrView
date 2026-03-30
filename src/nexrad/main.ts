@@ -69,7 +69,13 @@ async function fetchLatest(redis: Redis, stationId: string): Promise<boolean> {
       return false;
     }
 
-    if (latestVolume.get(stationId) === latest.Key) return false;
+    if (latestVolume.get(stationId) === latest.Key) {
+      // Data hasn't changed but refresh the status TTL so it doesn't expire
+      await writeStatusToRedis(redis, {
+        stationId, status: 'active', lastDataTime: fileTime, ageMinutes,
+      });
+      return false;
+    }
 
     const fileUrl = `${S3_BASE}/${latest.Key}`;
     const fileResp = await fetch(fileUrl, { signal: AbortSignal.timeout(30000) });
