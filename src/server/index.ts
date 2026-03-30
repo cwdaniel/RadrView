@@ -30,7 +30,7 @@ const TRANSPARENT_PNG = Buffer.from(
 export function createApp(
   redis: Redis,
   options?: {
-    nexradTileHandler?: (z: number, x: number, y: number) => Promise<Buffer | null>;
+    nexradTileHandler?: (z: number, x: number, y: number, layer?: string) => Promise<Buffer | null>;
     nexradScanProvider?: NexradScanProvider;
   }
 ): { app: ReturnType<typeof express> } {
@@ -122,8 +122,9 @@ export function createApp(
 
     // NEXRAD Level 2 for high zoom
     const zoomNum = parseInt(z);
+    const nexradLayer = (req.query.layer as string) || 'reflectivity';
     if (options?.nexradTileHandler && zoomNum >= config.nexradZoomMin) {
-      const nexradPng = await options.nexradTileHandler(zoomNum, parseInt(x), parseInt(y));
+      const nexradPng = await options.nexradTileHandler(zoomNum, parseInt(x), parseInt(y), nexradLayer as any);
       if (nexradPng) {
         let colorized: Buffer;
         if (isTypedPalette(paletteName)) {

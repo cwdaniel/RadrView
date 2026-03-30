@@ -36,13 +36,13 @@ export async function writeScanToRedis(redis: Redis, scan: PreparedScan): Promis
   // Pack azimuthsRad Float32Array to base64
   const azBuf = Buffer.from(scan.azimuthsRad.buffer, scan.azimuthsRad.byteOffset, scan.azimuthsRad.byteLength);
 
-  // Pack all gatePixels arrays into one contiguous buffer
-  // Format: [radial0 gates][radial1 gates]...[radialN gates]
-  // Each radial has exactly scan.gateCount bytes
-  const totalGateBytes = scan.gatePixels.length * scan.gateCount;
-  const gatesBuf = Buffer.alloc(totalGateBytes);
-  for (let i = 0; i < scan.gatePixels.length; i++) {
-    gatesBuf.set(scan.gatePixels[i], i * scan.gateCount);
+  // Pack gate arrays into contiguous buffers
+  function packGates(arrays: Uint8Array[], perRadialCount: number): string {
+    const buf = Buffer.alloc(arrays.length * perRadialCount);
+    for (let i = 0; i < arrays.length; i++) {
+      buf.set(arrays[i].subarray(0, perRadialCount), i * perRadialCount);
+    }
+    return buf.toString('base64');
   }
 
   await redis.hset(key, {
@@ -63,8 +63,13 @@ export async function writeScanToRedis(redis: Redis, scan: PreparedScan): Promis
     boundsSouth: String(scan.bounds.south),
     count: String(scan.count),
     mercatorScale: String(scan.mercatorScale),
+    velFirstGateRange: String(scan.velFirstGateRange),
+    velGateSpacing: String(scan.velGateSpacing),
+    velGateCount: String(scan.velGateCount),
     azimuthsRad: azBuf.toString('base64'),
-    gatePixels: gatesBuf.toString('base64'),
+    gatePixels: packGates(scan.gatePixels, scan.gateCount),
+    bioGatePixels: packGates(scan.bioGatePixels, scan.gateCount),
+    velGatePixels: packGates(scan.velGatePixels, scan.velGateCount || 1),
   });
   await redis.expire(key, SCAN_TTL);
 
@@ -97,12 +102,18 @@ export async function readScanFromRedis(redis: Redis, stationId: string): Promis
   const azBuf = Buffer.from(data.azimuthsRad, 'base64');
   const azimuthsRad = new Float32Array(azBuf.buffer, azBuf.byteOffset, azBuf.byteLength / 4);
 
-  // Unpack gatePixels
-  const gatesBuf = Buffer.from(data.gatePixels, 'base64');
-  const gatePixels: Uint8Array[] = [];
-  for (let i = 0; i < count; i++) {
-    gatePixels.push(new Uint8Array(gatesBuf.buffer, gatesBuf.byteOffset + i * gateCount, gateCount));
+  // Unpack gate pixel arrays
+  function unpackGates(b64: string, perRadial: number): Uint8Array[] {
+    if (!b64 || perRadial === 0) return Array.from({ length: count }, () => new Uint8Array(0));
+    const buf = Buffer.from(b64, 'base64');
+    const arrays: Uint8Array[] = [];
+    for (let i = 0; i < count; i++) {
+      arrays.push(new Uint8Array(buf.buffer, buf.byteOffset + i * perRadial, perRadial));
+    }
+    return arrays;
   }
+
+  const velGateCount = parseInt(data.velGateCount || '0');
 
   return {
     stationId: data.stationId,
@@ -112,7 +123,12 @@ export async function readScanFromRedis(redis: Redis, stationId: string): Promis
     stationLatRad: parseFloat(data.stationLatRad),
     stationLonRad: parseFloat(data.stationLonRad),
     azimuthsRad,
-    gatePixels,
+    gatePixels: unpackGates(data.gatePixels, gateCount),
+    bioGatePixels: unpackGates(data.bioGatePixels, gateCount),
+    velGatePixels: unpackGates(data.velGatePixels, velGateCount),
+    velFirstGateRange: parseFloat(data.velFirstGateRange || '0'),
+    velGateSpacing: parseFloat(data.velGateSpacing || '250'),
+    velGateCount,
     firstGateRange: parseFloat(data.firstGateRange),
     gateSpacing: parseFloat(data.gateSpacing),
     gateCount,

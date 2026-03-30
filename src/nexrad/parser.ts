@@ -26,6 +26,15 @@ export interface RadialGate {
   gateSpacing: number;
   /** Reflectivity values in dBZ. NaN = no data (below threshold or range fold). */
   values: Float32Array;
+  /** Biological returns (dBZ where RhoHV < 0.95 but > 0.3). NaN = no bio. */
+  bioValues: Float32Array;
+  /** Velocity gate data (may have different gate count/spacing than REF) */
+  velocity: {
+    values: Float32Array;  // m/s, NaN = no data. Negative = toward radar.
+    firstGateRange: number;
+    gateSpacing: number;
+    gateCount: number;
+  } | null;
 }
 
 /** Complete lowest-tilt reflectivity scan from one volume. */
@@ -143,31 +152,48 @@ function buildRadial(radar: Level2Radar, scanIndex: number): RadialGate | null {
   const firstGateRange = first_gate * 1000;
   const gateSpacing = gate_size * 1000;
 
-  // Build Float32Array: null → NaN, apply RhoHV filter
-  const values = new Float32Array(gate_count);
+  // Build weather + biological arrays from the same reflectivity data
+  const values = new Float32Array(gate_count);     // weather (RhoHV >= 0.95)
+  const bioValues = new Float32Array(gate_count);   // biological (RhoHV 0.3-0.95, dBZ >= 0)
+
   for (let i = 0; i < gate_count; i++) {
     const v = moment_data[i];
-    if (v === null || v === undefined) {
-      values[i] = NaN;
-      continue;
-    }
+    values[i] = NaN;
+    bioValues[i] = NaN;
 
-    // Filter weak returns — below 5 dBZ is almost always non-meteorological
-    if (v < MIN_DBZ_THRESHOLD) {
-      values[i] = NaN;
-      continue;
-    }
+    if (v === null || v === undefined) continue;
 
-    // Filter by RhoHV — low RhoHV = non-meteorological target
-    if (rhoLookup) {
-      const rho = rhoLookup[i];
-      if (rho === null || rho === undefined || rho < RHOHV_THRESHOLD) {
-        values[i] = NaN;
-        continue;
-      }
-    }
+    const rho = rhoLookup ? rhoLookup[i] : null;
 
-    values[i] = v;
+    // Weather: high RhoHV + above dBZ threshold
+    if (v >= MIN_DBZ_THRESHOLD && rho !== null && rho !== undefined && rho >= RHOHV_THRESHOLD) {
+      values[i] = v;
+    }
+    // Biological: low-to-mid RhoHV + above noise floor
+    else if (v >= 0 && rho !== null && rho !== undefined && rho >= 0.3 && rho < RHOHV_THRESHOLD) {
+      bioValues[i] = v;
+    }
+    // No RhoHV available — put in weather if above threshold
+    else if (rho === null || rho === undefined) {
+      if (v >= MIN_DBZ_THRESHOLD) values[i] = v;
+    }
+  }
+
+  // Extract velocity data (may have different gate geometry than REF)
+  let velocity: RadialGate['velocity'] = null;
+  const velBlock = (msgRecord as any).velocity;
+  if (velBlock?.moment_data && velBlock.gate_count > 0) {
+    const velValues = new Float32Array(velBlock.gate_count);
+    for (let i = 0; i < velBlock.gate_count; i++) {
+      const v = velBlock.moment_data[i];
+      velValues[i] = v === null || v === undefined ? NaN : v;
+    }
+    velocity = {
+      values: velValues,
+      firstGateRange: velBlock.first_gate * 1000,
+      gateSpacing: velBlock.gate_size * 1000,
+      gateCount: velBlock.gate_count,
+    };
   }
 
   return {
@@ -176,6 +202,8 @@ function buildRadial(radar: Level2Radar, scanIndex: number): RadialGate | null {
     firstGateRange,
     gateSpacing,
     values,
+    bioValues,
+    velocity,
   };
 }
 

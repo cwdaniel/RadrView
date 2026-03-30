@@ -1,0 +1,18 @@
+{
+  "name": "velocity",
+  "description": "Doppler velocity — green=toward, red=away",
+  "encoding": "velocity",
+  "stops": [
+    { "value": 1,   "color": [0, 180, 0, 255] },
+    { "value": 32,  "color": [0, 255, 0, 255] },
+    { "value": 64,  "color": [0, 200, 100, 255] },
+    { "value": 96,  "color": [100, 255, 200, 220] },
+    { "value": 120, "color": [180, 240, 220, 180] },
+    { "value": 128, "color": [128, 128, 128, 100] },
+    { "value": 136, "color": [220, 240, 180, 180] },
+    { "value": 160, "color": [255, 200, 100, 220] },
+    { "value": 192, "color": [255, 100, 0, 255] },
+    { "value": 224, "color": [255, 0, 0, 255] },
+    { "value": 255, "color": [180, 0, 0, 255] }
+  ]
+}

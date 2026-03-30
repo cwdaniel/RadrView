@@ -1,19 +1,19 @@
 import sharp from 'sharp';
 import { LRUCache } from 'lru-cache';
-import { renderTile } from '../nexrad/projector.js';
+import { renderTile, type NexradLayer } from '../nexrad/projector.js';
 import type { NexradScanProvider } from './nexrad-scan-provider.js';
 import { tileToMercatorBounds } from '../utils/geo.js';
 
 // Cache rendered NEXRAD tiles
-const tileCache = new LRUCache<string, Buffer>({ max: 5000 });
-const emptyTiles = new LRUCache<string, true>({ max: 5000 });
+const tileCache = new LRUCache<string, Buffer>({ max: 10000 });
+const emptyTiles = new LRUCache<string, true>({ max: 10000 });
 
 const R = 6378137;
 const RAD = 180 / Math.PI;
 
 export function createNexradTileHandler(provider: NexradScanProvider) {
   return async function handleNexradTile(
-    z: number, x: number, y: number
+    z: number, x: number, y: number, layer: NexradLayer = 'reflectivity'
   ): Promise<Buffer | null> {
     const bounds = tileToMercatorBounds(z, x, y);
     const west = (bounds.west / R) * RAD;
@@ -25,15 +25,15 @@ export function createNexradTileHandler(provider: NexradScanProvider) {
     const scans = await provider.getScansForBounds(west, south, east, north);
     if (scans.length === 0) return null;
 
-    // Check tile cache
+    // Check tile cache (include layer in cache key)
     const latestTs = Math.max(...scans.map(s => s.timestamp));
-    const cacheKey = `${z}/${x}/${y}/${latestTs}`;
+    const cacheKey = `${layer}/${z}/${x}/${y}/${latestTs}`;
     const cached = tileCache.get(cacheKey);
     if (cached !== undefined) return cached;
     if (emptyTiles.has(cacheKey)) return null;
 
     // Render
-    const pixels = renderTile(z, x, y, scans);
+    const pixels = renderTile(z, x, y, scans, layer);
     if (!pixels) {
       emptyTiles.set(cacheKey, true);
       return null;

@@ -23,6 +23,8 @@ const TILE_SIZE = 256;
 // PreparedScan — pre-processed polar data for fast inverse-projection lookup
 // ---------------------------------------------------------------------------
 
+export type NexradLayer = 'reflectivity' | 'biological' | 'velocity';
+
 export interface PreparedScan {
   stationId: string;
   timestamp: number;
@@ -30,10 +32,17 @@ export interface PreparedScan {
   stationMy: number;
   stationLatRad: number;
   stationLonRad: number;
-  /** Sorted radial azimuths in radians (for fast lookup) */
   azimuthsRad: Float32Array;
-  /** For each radial: pre-encoded pixel values */
+  /** Weather reflectivity (RhoHV >= 0.95) — pre-encoded pixel values */
   gatePixels: Uint8Array[];
+  /** Biological returns (RhoHV 0.3-0.95) — pre-encoded pixel values */
+  bioGatePixels: Uint8Array[];
+  /** Velocity — pre-encoded: 0=nodata, 1-127=toward radar, 128=zero, 129-255=away */
+  velGatePixels: Uint8Array[];
+  /** Velocity gate geometry (may differ from reflectivity) */
+  velFirstGateRange: number;
+  velGateSpacing: number;
+  velGateCount: number;
   firstGateRange: number;
   gateSpacing: number;
   gateCount: number;
@@ -41,7 +50,6 @@ export interface PreparedScan {
   maxRangeM: number;
   bounds: { west: number; east: number; north: number; south: number };
   count: number;
-  /** Mercator scale factor at station latitude (for fast distance calc) */
   mercatorScale: number;
 }
 
@@ -62,6 +70,15 @@ function latLonToMercator(lat: number, lon: number): { mx: number; my: number } 
 // prepareScan — runs once per scan update
 // ---------------------------------------------------------------------------
 
+/** Encode velocity (m/s) to a byte: 0=nodata, 1-127=toward radar, 128=zero, 129-255=away.
+ *  Range: -63.5 to +63.5 m/s mapped to 1-255. */
+function velocityToPixel(vel: number): number {
+  if (isNaN(vel)) return 0;
+  // Clamp to ±63.5 m/s
+  const clamped = Math.max(-63.5, Math.min(63.5, vel));
+  return Math.round((clamped + 63.5) / 127 * 254 + 1);
+}
+
 export function projectScan(station: NexradStation, scan: ScanData): PreparedScan {
   const { mx: stationMx, my: stationMy } = latLonToMercator(station.lat, station.lon);
 
@@ -69,15 +86,31 @@ export function projectScan(station: NexradStation, scan: ScanData): PreparedSca
 
   const azimuthsRad = new Float32Array(sorted.length);
   const gatePixels: Uint8Array[] = [];
+  const bioGatePixels: Uint8Array[] = [];
+  const velGatePixels: Uint8Array[] = [];
 
   const firstRadial = sorted[0];
   const firstGateRange = firstRadial.firstGateRange;
   const gateSpacing = firstRadial.gateSpacing;
   const gateCount = firstRadial.values.length;
 
+  // Velocity may have different gate geometry — use the first radial that has it
+  let velFirstGateRange = 0;
+  let velGateSpacing = 250;
+  let velGateCount = 0;
+  for (const r of sorted) {
+    if (r.velocity) {
+      velFirstGateRange = r.velocity.firstGateRange;
+      velGateSpacing = r.velocity.gateSpacing;
+      velGateCount = r.velocity.gateCount;
+      break;
+    }
+  }
+
   for (let i = 0; i < sorted.length; i++) {
     azimuthsRad[i] = sorted[i].azimuth * DEG;
 
+    // Weather reflectivity
     const values = sorted[i].values;
     const pixels = new Uint8Array(values.length);
     for (let g = 0; g < values.length; g++) {
@@ -85,6 +118,27 @@ export function projectScan(station: NexradStation, scan: ScanData): PreparedSca
       pixels[g] = (isNaN(dbz) || dbz < -10) ? 0 : dbzToPixel(dbz);
     }
     gatePixels.push(pixels);
+
+    // Biological reflectivity
+    const bioValues = sorted[i].bioValues;
+    const bioPx = new Uint8Array(bioValues.length);
+    for (let g = 0; g < bioValues.length; g++) {
+      const dbz = bioValues[g];
+      bioPx[g] = (isNaN(dbz) || dbz < -10) ? 0 : dbzToPixel(dbz);
+    }
+    bioGatePixels.push(bioPx);
+
+    // Velocity
+    const vel = sorted[i].velocity;
+    if (vel && vel.gateCount > 0) {
+      const velPx = new Uint8Array(vel.gateCount);
+      for (let g = 0; g < vel.gateCount; g++) {
+        velPx[g] = velocityToPixel(vel.values[g]);
+      }
+      velGatePixels.push(velPx);
+    } else {
+      velGatePixels.push(new Uint8Array(velGateCount));
+    }
   }
 
   const maxSlantRange = firstGateRange + gateCount * gateSpacing;
@@ -107,6 +161,11 @@ export function projectScan(station: NexradStation, scan: ScanData): PreparedSca
     stationLonRad: station.lon * DEG,
     azimuthsRad,
     gatePixels,
+    bioGatePixels,
+    velGatePixels,
+    velFirstGateRange,
+    velGateSpacing,
+    velGateCount,
     firstGateRange,
     gateSpacing,
     gateCount,
@@ -172,6 +231,7 @@ export function renderTile(
   x: number,
   y: number,
   projectedScans: PreparedScan[],
+  layer: NexradLayer = 'reflectivity',
 ): Uint8Array | null {
   const bounds = tileToMercatorBounds(z, x, y);
   const tileWidthM = bounds.east - bounds.west;
@@ -235,10 +295,30 @@ export function renderTile(
 
         const groundRangeM = Math.sqrt(groundRangeSq);
 
-        // Gate index from ground range (approximate: skip 4/3 earth correction
-        // for the gate lookup — error is <1 gate at typical elevations)
-        const gateIdx = Math.round((groundRangeM - scan.firstGateRange) / scan.gateSpacing);
-        if (gateIdx < 0 || gateIdx >= scan.gateCount) continue;
+        // Select gate geometry and pixel array based on layer
+        let layerFirstGate: number, layerSpacing: number, layerGateCount: number;
+        let layerPixels: Uint8Array[];
+        if (layer === 'velocity') {
+          layerFirstGate = scan.velFirstGateRange;
+          layerSpacing = scan.velGateSpacing;
+          layerGateCount = scan.velGateCount;
+          layerPixels = scan.velGatePixels;
+        } else if (layer === 'biological') {
+          layerFirstGate = scan.firstGateRange;
+          layerSpacing = scan.gateSpacing;
+          layerGateCount = scan.gateCount;
+          layerPixels = scan.bioGatePixels;
+        } else {
+          layerFirstGate = scan.firstGateRange;
+          layerSpacing = scan.gateSpacing;
+          layerGateCount = scan.gateCount;
+          layerPixels = scan.gatePixels;
+        }
+
+        if (layerGateCount === 0) continue;
+
+        const gateIdx = Math.round((groundRangeM - layerFirstGate) / layerSpacing);
+        if (gateIdx < 0 || gateIdx >= layerGateCount) continue;
 
         // Azimuth: atan2(east, north) → clockwise from north
         let az = Math.atan2(groundDx, groundDy);
@@ -254,7 +334,7 @@ export function renderTile(
         if (Math.abs(azDiff) > maxAzGapRad) continue;
 
         // Sample
-        const pixel = scan.gatePixels[radialIdx][gateIdx];
+        const pixel = layerPixels[radialIdx]?.[gateIdx] ?? 0;
         if (pixel > bestPixel) bestPixel = pixel;
       }
 
