@@ -19,11 +19,11 @@ services:
       - NEXRAD_STATIONS=all
       - NEXRAD_ZOOM_MIN=8
     labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.radrview.rule=Host(`radrview.com`) || Host(`www.radrview.com`)"
-      - "traefik.http.routers.radrview.entrypoints=websecure"
-      - "traefik.http.routers.radrview.tls.certresolver=letsencrypt"
-      - "traefik.http.services.radrview.loadbalancer.server.port=8600"
+      traefik.enable: "true"
+      traefik.http.routers.radrview.rule: "Host(`radrview.com`) || Host(`www.radrview.com`)"
+      traefik.http.routers.radrview.entrypoints: "web"
+      traefik.http.services.radrview.loadbalancer.server.port: "8600"
+      traefik.docker.network: "proxy"
     networks:
       - proxy
       - internal
