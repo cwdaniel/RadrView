@@ -1,6 +1,8 @@
 node_modules/
 dist/
 data/
+docs/
+radrview/
 *.tif
 *.grib2
 *.grib2.gz
