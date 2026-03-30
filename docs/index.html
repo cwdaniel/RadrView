@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RadrView Documentation</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0d0f12; color: #d1d5de; }
+
+    /* ── Top Bar (matches app) ── */
+    .topbar {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      z-index: 200;
+      height: 48px;
+      display: flex;
+      align-items: center;
+      gap: 0;
+      padding: 0 16px;
+      background: #151820;
+      border-bottom: 1px solid rgba(255,255,255,0.07);
+    }
+    .topbar-logo {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
+      text-decoration: none;
+      color: #d1d5de;
+    }
+    .topbar-logo svg { width: 20px; height: 20px; color: #5b9bd5; }
+    .topbar-logo span { font-size: 15px; font-weight: 600; color: #fff; letter-spacing: 0.2px; }
+    .topbar-logo small {
+      font-size: 9px; font-weight: 500; text-transform: uppercase; letter-spacing: 1px;
+      color: #585e70; background: #222736; border: 1px solid rgba(255,255,255,0.07);
+      padding: 1px 5px; border-radius: 3px; align-self: center;
+    }
+    .topbar-sep { width: 1px; height: 20px; background: rgba(255,255,255,0.07); margin: 0 16px; flex-shrink: 0; }
+    .topbar-meta {
+      display: flex; align-items: center; gap: 4px; margin-left: auto; flex-shrink: 0;
+    }
+    .topbar-meta a {
+      color: #8b90a0; text-decoration: none; font-size: 12px;
+      padding: 5px 10px; border-radius: 5px; transition: color 0.15s, background 0.15s;
+    }
+    .topbar-meta a:hover { color: #fff; background: #222736; }
+
+    /* Layout */
+    .layout { display: flex; min-height: 100vh; padding-top: 48px; }
+
+    /* Sidebar */
+    .sidebar {
+      width: 260px;
+      flex-shrink: 0;
+      background: #0d0f12;
+      border-right: 1px solid rgba(255,255,255,0.07);
+      position: fixed;
+      top: 48px; left: 0; bottom: 0;
+      overflow-y: auto;
+      padding: 16px 0;
+      z-index: 100;
+    }
+    .sidebar-section {
+      padding: 16px 20px 4px;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: #585e70;
+    }
+    .sidebar a.doc-link {
+      display: block;
+      padding: 7px 20px 7px 24px;
+      font-size: 13px;
+      color: #8b90a0;
+      text-decoration: none;
+      border-left: 2px solid transparent;
+      transition: all 0.1s;
+    }
+    .sidebar a.doc-link:hover { color: #ccc; background: rgba(255,255,255,0.02); }
+    .sidebar a.doc-link.active {
+      color: #5b9bd5;
+      border-left-color: #5b9bd5;
+      background: rgba(68,170,238,0.05);
+    }
+    .sidebar a.doc-link .sub {
+      display: block;
+      font-size: 11px;
+      color: #585e70;
+      margin-top: 1px;
+    }
+
+    /* Mobile sidebar toggle */
+    .sidebar-toggle {
+      display: none;
+      position: fixed;
+      top: 56px; left: 12px;
+      z-index: 150;
+      background: rgba(10,10,24,0.9);
+      border: 1px solid rgba(255,255,255,0.1);
+      color: #fff;
+      width: 36px; height: 36px;
+      border-radius: 6px;
+      font-size: 18px;
+      cursor: pointer;
+    }
+    @media (max-width: 768px) {
+      .sidebar { transform: translateX(-100%); transition: transform 0.2s; top: 48px; }
+      .sidebar.open { transform: translateX(0); }
+      .sidebar-toggle { display: block; }
+      .content { margin-left: 0 !important; }
+      .sidebar-overlay {
+        display: none;
+        position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(0,0,0,0.5); z-index: 99;
+      }
+      .sidebar-overlay.open { display: block; }
+    }
+
+    /* Content */
+    .content {
+      flex: 1;
+      margin-left: 260px;
+      max-width: 800px;
+      padding: 40px 40px 80px;
+    }
+    @media (max-width: 768px) {
+      .content { padding: 60px 20px 80px; }
+    }
+
+    /* Markdown rendering */
+    .content h1 { font-size: 26px; color: #fff; margin: 0 0 16px; padding-bottom: 8px; border-bottom: 1px solid rgba(255,255,255,0.08); }
+    .content h2 { font-size: 20px; color: #fff; margin: 32px 0 12px; padding-bottom: 6px; border-bottom: 1px solid rgba(255,255,255,0.07); }
+    .content h3 { font-size: 16px; color: #ccc; margin: 24px 0 8px; }
+    .content h4 { font-size: 14px; color: #aaa; margin: 16px 0 6px; }
+    .content p { margin: 8px 0; line-height: 1.7; font-size: 14px; }
+    .content a { color: #5b9bd5; text-decoration: none; }
+    .content a:hover { text-decoration: underline; }
+    .content strong { color: #fff; }
+    .content code { background: #1b1f2a; padding: 2px 6px; border-radius: 3px; font-size: 13px; color: #5b9bd5; font-family: 'IBM Plex Mono', 'SFMono-Regular', Consolas, monospace; }
+    .content pre { background: #151820; border: 1px solid rgba(255,255,255,0.07); border-radius: 6px; padding: 16px; overflow-x: auto; margin: 12px 0; line-height: 1.5; }
+    .content pre code { background: none; padding: 0; color: #bbb; font-size: 13px; }
+    .content table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13px; }
+    .content th { text-align: left; color: #8b90a0; font-weight: 600; padding: 8px 8px; border-bottom: 1px solid rgba(255,255,255,0.1); }
+    .content td { padding: 8px 8px; border-bottom: 1px solid rgba(255,255,255,0.04); vertical-align: top; }
+    .content ul, .content ol { padding-left: 20px; margin: 8px 0; }
+    .content li { margin: 4px 0; line-height: 1.6; font-size: 14px; }
+    .content blockquote { border-left: 3px solid #5b9bd5; padding: 8px 16px; color: #8b90a0; margin: 12px 0; background: rgba(68,170,238,0.03); border-radius: 0 4px 4px 0; }
+    .content hr { border: none; border-top: 1px solid rgba(255,255,255,0.07); margin: 24px 0; }
+    .content img { max-width: 100%; border-radius: 4px; }
+
+    /* Loading */
+    .loading { color: #585e70; font-style: italic; padding: 40px 0; }
+  </style>
+</head>
+<body>
+
+  <div class="topbar">
+    <a href="/" class="topbar-logo">
+      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="10" cy="10" r="2"/>
+        <path d="M10 10 L17 5"/>
+        <circle cx="10" cy="10" r="5" stroke-opacity="0.4"/>
+        <circle cx="10" cy="10" r="8.5" stroke-opacity="0.2"/>
+      </svg>
+      <span>RadrView</span>
+      <small>oss</small>
+    </a>
+    <div class="topbar-sep"></div>
+    <div class="topbar-meta">
+      <a href="/">Home</a>
+      <a href="/app">App</a>
+      <a href="https://github.com/cwdaniel/radrview" target="_blank" rel="noopener">GitHub</a>
+    </div>
+  </div>
+
+  <button class="sidebar-toggle" id="sidebar-toggle">&#9776;</button>
+  <div class="sidebar-overlay" id="sidebar-overlay"></div>
+
+  <div class="layout">
+    <nav class="sidebar" id="sidebar">
+      <div class="sidebar-section">Getting Started</div>
+      <a href="#getting-started" class="doc-link" data-doc="getting-started">
+        Quick Start
+        <span class="sub">Tiles in 5 minutes</span>
+      </a>
+
+      <div class="sidebar-section">Concepts</div>
+      <a href="#architecture" class="doc-link" data-doc="architecture">
+        Architecture
+        <span class="sub">Pipeline &amp; data flow</span>
+      </a>
+      <a href="#sources" class="doc-link" data-doc="sources">
+        Data Sources
+        <span class="sub">MRMS, EC, DWD coverage</span>
+      </a>
+      <a href="#palettes" class="doc-link" data-doc="palettes">
+        Palettes
+        <span class="sub">Color LUTs &amp; custom palettes</span>
+      </a>
+
+      <div class="sidebar-section">Reference</div>
+      <a href="#api" class="doc-link" data-doc="api">
+        API Reference
+        <span class="sub">Endpoints &amp; WebSocket</span>
+      </a>
+      <a href="#configuration" class="doc-link" data-doc="configuration">
+        Configuration
+        <span class="sub">Environment variables</span>
+      </a>
+
+      <div class="sidebar-section">Guides</div>
+      <a href="#adding-a-source" class="doc-link" data-doc="adding-a-source">
+        Adding a Source
+        <span class="sub">Contributor guide</span>
+      </a>
+      <a href="#deployment" class="doc-link" data-doc="deployment">
+        Deployment
+        <span class="sub">Production &amp; caching</span>
+      </a>
+      <a href="#gotchas" class="doc-link" data-doc="gotchas">
+        Gotchas
+        <span class="sub">Known issues</span>
+      </a>
+    </nav>
+
+    <main class="content" id="content">
+      <div class="loading">Select a page from the sidebar, or loading...</div>
+    </main>
+  </div>
+
+  <script>
+    const content = document.getElementById('content');
+    const sidebar = document.getElementById('sidebar');
+    const overlay = document.getElementById('sidebar-overlay');
+    const toggle = document.getElementById('sidebar-toggle');
+    const docLinks = document.querySelectorAll('.doc-link');
+    const cache = {};
+
+    // Mobile sidebar
+    toggle.addEventListener('click', () => { sidebar.classList.toggle('open'); overlay.classList.toggle('open'); });
+    overlay.addEventListener('click', () => { sidebar.classList.remove('open'); overlay.classList.remove('open'); });
+
+    // Load doc
+    async function loadDoc(name, pushState) {
+      // Highlight active link
+      docLinks.forEach(l => l.classList.toggle('active', l.dataset.doc === name));
+
+      // Close mobile sidebar
+      sidebar.classList.remove('open');
+      overlay.classList.remove('open');
+
+      if (cache[name]) {
+        content.innerHTML = cache[name];
+        window.scrollTo(0, 0);
+        if (pushState) history.pushState(null, '', `#${name}`);
+        return;
+      }
+
+      content.innerHTML = '<div class="loading">Loading...</div>';
+
+      try {
+        const res = await fetch(`/docs/${name}.md`);
+        if (!res.ok) throw new Error('Not found');
+        const md = await res.text();
+        const html = renderMarkdown(md);
+        cache[name] = html;
+        content.innerHTML = html;
+        window.scrollTo(0, 0);
+        if (pushState) history.pushState(null, '', `#${name}`);
+      } catch {
+        content.innerHTML = '<p>Failed to load document.</p>';
+      }
+    }
+
+    // Click handlers
+    docLinks.forEach(link => {
+      link.addEventListener('click', (e) => {
+        e.preventDefault();
+        loadDoc(link.dataset.doc, true);
+      });
+    });
+
+    // Browser back/forward
+    window.addEventListener('popstate', () => {
+      const doc = location.hash.slice(1) || 'getting-started';
+      loadDoc(doc, false);
+    });
+
+    // Markdown renderer
+    function renderMarkdown(md) {
+      let html = '';
+      const lines = md.split('\n');
+      let inCode = false, codeLang = '', inTable = false, inList = false, listTag = '';
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+
+        if (line.startsWith('```')) {
+          if (inCode) { html += '</code></pre>'; inCode = false; }
+          else { codeLang = line.slice(3).trim(); html += `<pre><code>`; inCode = true; }
+          continue;
+        }
+        if (inCode) { html += esc(line) + '\n'; continue; }
+
+        // Close list
+        if (inList && !/^\s*[-*\d]/.test(line) && line.trim() !== '') {
+          html += `</${listTag}>`; inList = false;
+        }
+
+        // Table
+        if (line.includes('|') && line.trim().startsWith('|')) {
+          const cells = line.split('|').slice(1, -1).map(c => c.trim());
+          if (cells.every(c => /^[-:]+$/.test(c))) continue;
+          if (!inTable) { html += '<table>'; inTable = true; }
+          const isHeader = !html.includes('<td') || (inTable && i > 0 && lines[i+1] && /^[|\s-:]+$/.test(lines[i+1]));
+          const tag = isHeader && !html.match(/<\/th>\s*$/) ? 'th' : 'td';
+          html += '<tr>' + cells.map(c => `<${tag}>${inline(c)}</${tag}>`).join('') + '</tr>';
+          continue;
+        }
+        if (inTable) { html += '</table>'; inTable = false; }
+
+        // Headings
+        const hm = line.match(/^(#{1,4})\s+(.*)$/);
+        if (hm) { const lvl = hm[1].length; html += `<h${lvl}>${inline(hm[2])}</h${lvl}>`; continue; }
+
+        // HR
+        if (/^---+$/.test(line.trim())) { html += '<hr>'; continue; }
+
+        // Blockquote
+        if (line.startsWith('> ')) { html += `<blockquote>${inline(line.slice(2))}</blockquote>`; continue; }
+
+        // Unordered list
+        if (/^\s*[-*]\s/.test(line)) {
+          if (!inList) { html += '<ul>'; inList = true; listTag = 'ul'; }
+          html += `<li>${inline(line.replace(/^\s*[-*]\s/, ''))}</li>`;
+          continue;
+        }
+
+        // Ordered list
+        if (/^\s*\d+\.\s/.test(line)) {
+          if (!inList) { html += '<ol>'; inList = true; listTag = 'ol'; }
+          html += `<li>${inline(line.replace(/^\s*\d+\.\s/, ''))}</li>`;
+          continue;
+        }
+
+        if (line.trim() === '') continue;
+        html += `<p>${inline(line)}</p>`;
+      }
+
+      if (inCode) html += '</code></pre>';
+      if (inTable) html += '</table>';
+      if (inList) html += `</${listTag}>`;
+      return html;
+    }
+
+    function esc(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+    function inline(t) {
+      return t
+        .replace(/`([^`]+)`/g, '<code>$1</code>')
+        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+        .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
+    }
+
+    // Init — load from hash or default to getting-started
+    const initial = location.hash.slice(1) || 'getting-started';
+    loadDoc(initial, false);
+  </script>
+</body>
+</html>
