@@ -635,7 +635,6 @@
         <div class="sidebar-label">Layer</div>
         <select id="layer">
           <option value="reflectivity" selected>Reflectivity</option>
-          <option value="velocity">Velocity (Wind)</option>
           <option value="biological">Biological</option>
         </select>
       </div>
@@ -655,6 +654,19 @@
           <input type="range" id="opacity" min="0" max="100" value="70">
           <span class="opacity-val" id="opacityVal">70%</span>
         </div>
+      </div>
+
+      <!-- Overlays -->
+      <div class="sidebar-section">
+        <div class="sidebar-label">Overlays</div>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-2);cursor:pointer;">
+          <input type="checkbox" id="show-wind" style="accent-color:var(--blue, #5b9bd5);">
+          Wind flow
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-2);cursor:pointer;margin-top:4px;">
+          <input type="checkbox" id="show-stations" style="accent-color:var(--blue, #5b9bd5);">
+          Radar stations
+        </label>
       </div>
 
       <!-- dBZ Reference -->
@@ -710,18 +722,6 @@
         </div>
       </div>
 
-      <!-- Map Layers -->
-      <div class="sidebar-section">
-        <div class="sidebar-label">Map Layers</div>
-        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-2);cursor:pointer;margin-top:8px;">
-          <input type="checkbox" id="show-stations" style="accent-color:var(--blue, #5b9bd5);">
-          Show radar stations
-        </label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-2);cursor:pointer;margin-top:4px;">
-          <input type="checkbox" id="show-wind" style="accent-color:var(--blue, #5b9bd5);">
-          Wind flow
-        </label>
-      </div>
 
       <!-- About -->
       <div class="sidebar-section" style="margin-top:auto">
@@ -1077,12 +1077,10 @@
       const layer = document.getElementById('layer').value;
       const paletteEl = document.getElementById('palette');
       // Auto-switch palette to match layer
-      if (layer === 'velocity' && paletteEl.querySelector('option[value="velocity"]')) {
-        paletteEl.value = 'velocity';
-      } else if (layer === 'biological' && paletteEl.querySelector('option[value="biological"]')) {
+      if (layer === 'biological' && paletteEl.querySelector('option[value="biological"]')) {
         paletteEl.value = 'biological';
       } else if (layer === 'reflectivity') {
-        if (paletteEl.value === 'velocity' || paletteEl.value === 'biological') {
+        if (paletteEl.value === 'biological') {
           paletteEl.value = 'dark';
         }
       }
