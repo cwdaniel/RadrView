@@ -11,6 +11,8 @@ import { createFramesRouter } from './frames.js';
 import { createHealthRouter } from './health.js';
 import { loadPalettes, getLUT, isTypedPalette, colorizeTilePng, colorizePrecipType, createPaletteRouter } from './palette.js';
 import { createMetricsRouter, recordCacheHit, recordCacheMiss, recordServeDuration } from './metrics.js';
+import { createWindRouter } from './wind.js';
+import { startWindFetcher } from '../wind/fetcher.js';
 import { createNexradTileHandler } from './nexrad-tile.js';
 import { NexradScanProvider } from './nexrad-scan-provider.js';
 import { getAllStations } from '../nexrad/stations.js';
@@ -70,6 +72,7 @@ export function createApp(
   app.use(createHealthRouter(redis));
   app.use(createPaletteRouter());
   app.use(createMetricsRouter(redis));
+  app.use(createWindRouter());
 
   // NEXRAD station locations with status
   app.get('/nexrad/stations', async (_req, res) => {
@@ -224,6 +227,11 @@ if (isMainModule) {
 
     logger.info({ zoomMin: config.nexradZoomMin }, 'NEXRAD tile serving enabled (ingester runs separately)');
   }
+
+  // Wind data fetcher (GFS model, refreshes every 6 hours)
+  startWindFetcher(config.dataDir).catch(err => {
+    logger.error({ err }, 'Wind fetcher failed to start');
+  });
 
   const { app } = createApp(redis, { nexradTileHandler, nexradScanProvider });
   const httpServer = createServer(app);

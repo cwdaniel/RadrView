@@ -619,6 +619,7 @@
   <div class="main">
     <div id="map"></div>
     <canvas id="sweep-canvas" style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:500;"></canvas>
+    <canvas id="wind-canvas" style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:400;display:none;"></canvas>
 
     <!-- Right Sidebar -->
     <aside class="sidebar">
@@ -715,6 +716,10 @@
         <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-2);cursor:pointer;margin-top:8px;">
           <input type="checkbox" id="show-stations" style="accent-color:var(--blue, #5b9bd5);">
           Show radar stations
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-2);cursor:pointer;margin-top:4px;">
+          <input type="checkbox" id="show-wind" style="accent-color:var(--blue, #5b9bd5);">
+          Wind flow
         </label>
       </div>
 
@@ -1325,6 +1330,194 @@
     // Redraw on map interaction (throttled via rAF)
     map.on('move zoom viewreset', requestSweepRedraw);
     window.addEventListener('resize', () => { resizeSweepCanvas(); requestSweepRedraw(); });
+
+    // ── Wind Flow Visualization ──
+    const windCanvas = document.getElementById('wind-canvas');
+    const windCtx = windCanvas ? windCanvas.getContext('2d') : null;
+    let windGrid = null;  // { u: Float32Array, v: Float32Array, width, height, ... }
+    let windParticles = [];
+    let windAnimFrame = null;
+    let windEnabled = false;
+    const PARTICLE_COUNT = 30000;
+    const TRAIL_LENGTH = 30;
+    const SPEED_SCALE = 0.25;  // degrees per m/s per frame
+
+    // Wind speed color LUT (256 entries, blue→green→yellow→red)
+    const windColors = [];
+    for (let i = 0; i < 256; i++) {
+      const t = i / 255;
+      let r, g, b;
+      if (t < 0.25) { r = 0; g = Math.round(t * 4 * 200); b = Math.round(200 - t * 4 * 100); }
+      else if (t < 0.5) { r = Math.round((t - 0.25) * 4 * 255); g = 200; b = Math.round(100 - (t - 0.25) * 4 * 100); }
+      else if (t < 0.75) { r = 255; g = Math.round(200 - (t - 0.5) * 4 * 200); b = 0; }
+      else { r = 255; g = 0; b = Math.round((t - 0.75) * 4 * 100); }
+      windColors.push(`rgba(${r},${g},${b},0.7)`);
+    }
+
+    async function loadWindGrid() {
+      try {
+        const resp = await fetch('/wind/grid');
+        if (!resp.ok) return;
+        const data = await resp.json();
+        // Decode base64 float arrays
+        const uBuf = Uint8Array.from(atob(data.u), c => c.charCodeAt(0));
+        const vBuf = Uint8Array.from(atob(data.v), c => c.charCodeAt(0));
+        windGrid = {
+          u: new Float32Array(uBuf.buffer),
+          v: new Float32Array(vBuf.buffer),
+          width: data.width,
+          height: data.height,
+          lonMin: data.lonMin,
+          latMax: data.latMax,
+          dx: data.dx,
+          dy: data.dy,
+        };
+        initParticles();
+      } catch (e) { console.warn('Wind grid load failed:', e); }
+    }
+
+    function initParticles() {
+      windParticles = [];
+      for (let i = 0; i < PARTICLE_COUNT; i++) {
+        windParticles.push(spawnParticle());
+      }
+    }
+
+    function spawnParticle() {
+      return {
+        lon: Math.random() * 360,
+        lat: Math.random() * 180 - 90,
+        trail: [],
+        age: Math.floor(Math.random() * 200),
+        maxAge: 150 + Math.floor(Math.random() * 100),
+      };
+    }
+
+    function sampleWind(lon, lat) {
+      if (!windGrid) return { u: 0, v: 0 };
+      // Convert lon to 0-360 range
+      let glon = lon % 360;
+      if (glon < 0) glon += 360;
+      // Grid indices
+      const xi = glon / windGrid.dx;
+      const yi = (windGrid.latMax - lat) / windGrid.dy;
+      const x0 = Math.floor(xi), y0 = Math.floor(yi);
+      const x1 = (x0 + 1) % windGrid.width, y1 = Math.min(y0 + 1, windGrid.height - 1);
+      const fx = xi - x0, fy = yi - y0;
+      // Bilinear interpolation
+      const idx00 = y0 * windGrid.width + x0;
+      const idx10 = y0 * windGrid.width + x1;
+      const idx01 = y1 * windGrid.width + x0;
+      const idx11 = y1 * windGrid.width + x1;
+      const u = windGrid.u[idx00] * (1-fx)*(1-fy) + windGrid.u[idx10] * fx*(1-fy) +
+                windGrid.u[idx01] * (1-fx)*fy + windGrid.u[idx11] * fx*fy;
+      const v = windGrid.v[idx00] * (1-fx)*(1-fy) + windGrid.v[idx10] * fx*(1-fy) +
+                windGrid.v[idx01] * (1-fx)*fy + windGrid.v[idx11] * fx*fy;
+      return { u, v };
+    }
+
+    function animateWind() {
+      if (!windEnabled || !windCtx || !windGrid) return;
+
+      // Resize canvas if needed
+      const container = document.getElementById('map');
+      const rect = container.getBoundingClientRect();
+      if (windCanvas.width !== rect.width * devicePixelRatio) {
+        windCanvas.width = rect.width * devicePixelRatio;
+        windCanvas.height = rect.height * devicePixelRatio;
+        windCanvas.style.width = rect.width + 'px';
+        windCanvas.style.height = rect.height + 'px';
+      }
+
+      windCtx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+      windCtx.clearRect(0, 0, rect.width, rect.height);
+
+      const mapBounds = map.getBounds();
+      const west = mapBounds.getWest(), east = mapBounds.getEast();
+      const south = mapBounds.getSouth(), north = mapBounds.getNorth();
+
+      windCtx.lineWidth = 1;
+      windCtx.globalAlpha = 0.8;
+
+      for (let i = 0; i < windParticles.length; i++) {
+        const p = windParticles[i];
+        p.age++;
+
+        // Respawn if too old or off-screen
+        if (p.age > p.maxAge || p.lat < -85 || p.lat > 85) {
+          // Spawn within current viewport
+          windParticles[i] = {
+            lon: west + Math.random() * (east - west),
+            lat: south + Math.random() * (north - south),
+            trail: [],
+            age: 0,
+            maxAge: 150 + Math.floor(Math.random() * 100),
+          };
+          continue;
+        }
+
+        // Sample wind and move
+        const wind = sampleWind(p.lon, p.lat);
+        const speed = Math.sqrt(wind.u * wind.u + wind.v * wind.v);
+
+        // Move particle (scale by cos(lat) for longitude)
+        const cosLat = Math.cos(p.lat * Math.PI / 180);
+        p.lon += (wind.u * SPEED_SCALE) / Math.max(cosLat, 0.1);
+        p.lat += wind.v * SPEED_SCALE;
+
+        // Store trail point
+        const screenPt = map.latLngToContainerPoint([p.lat, p.lon]);
+        p.trail.push({ x: screenPt.x, y: screenPt.y, speed });
+        if (p.trail.length > TRAIL_LENGTH) p.trail.shift();
+
+        // Draw trail
+        if (p.trail.length > 1) {
+          // Color based on speed (0-25 m/s mapped to 0-255)
+          const colorIdx = Math.min(255, Math.floor(speed / 25 * 255));
+          windCtx.strokeStyle = windColors[colorIdx];
+          windCtx.beginPath();
+          windCtx.moveTo(p.trail[0].x, p.trail[0].y);
+          for (let t = 1; t < p.trail.length; t++) {
+            windCtx.lineTo(p.trail[t].x, p.trail[t].y);
+          }
+          windCtx.stroke();
+        }
+      }
+
+      windAnimFrame = requestAnimationFrame(animateWind);
+    }
+
+    // Clear trails on map move (they'd be in wrong positions)
+    map.on('movestart', () => {
+      if (windEnabled) {
+        windParticles.forEach(p => { p.trail = []; });
+      }
+    });
+
+    document.getElementById('show-wind')?.addEventListener('change', function() {
+      windEnabled = this.checked;
+      windCanvas.style.display = windEnabled ? 'block' : 'none';
+      if (windEnabled) {
+        if (!windGrid) loadWindGrid();
+        else { initParticles(); animateWind(); }
+      } else {
+        if (windAnimFrame) { cancelAnimationFrame(windAnimFrame); windAnimFrame = null; }
+        windCtx?.clearRect(0, 0, windCanvas.width, windCanvas.height);
+      }
+    });
+
+    // Refresh wind data periodically
+    setInterval(() => { if (windEnabled) loadWindGrid(); }, 6 * 60 * 60 * 1000);
+
+    // Start animation when grid loads
+    function onWindGridLoaded() {
+      if (windEnabled && windGrid) animateWind();
+    }
+    const origLoadWindGrid = loadWindGrid;
+    loadWindGrid = async function() {
+      await origLoadWindGrid();
+      onWindGridLoaded();
+    };
 
     // ── Health polling ──
     async function updateHealth() {
