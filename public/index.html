@@ -1338,20 +1338,20 @@
     let windParticles = [];
     let windAnimFrame = null;
     let windEnabled = false;
-    const PARTICLE_COUNT = 30000;
-    const TRAIL_LENGTH = 30;
-    const SPEED_SCALE = 0.25;  // degrees per m/s per frame
+    const PARTICLE_COUNT = 15000;
+    const TRAIL_LENGTH = 20;
+    const SPEED_SCALE = 0.15;
 
-    // Wind speed color LUT (256 entries, blue→green→yellow→red)
+    // Wind speed color LUT — subtle white-to-light-blue palette
     const windColors = [];
     for (let i = 0; i < 256; i++) {
       const t = i / 255;
-      let r, g, b;
-      if (t < 0.25) { r = 0; g = Math.round(t * 4 * 200); b = Math.round(200 - t * 4 * 100); }
-      else if (t < 0.5) { r = Math.round((t - 0.25) * 4 * 255); g = 200; b = Math.round(100 - (t - 0.25) * 4 * 100); }
-      else if (t < 0.75) { r = 255; g = Math.round(200 - (t - 0.5) * 4 * 200); b = 0; }
-      else { r = 255; g = 0; b = Math.round((t - 0.75) * 4 * 100); }
-      windColors.push(`rgba(${r},${g},${b},0.7)`);
+      // Calm: dim white/gray → Strong: brighter white with blue tint
+      const r = Math.round(140 + t * 115);
+      const g = Math.round(150 + t * 100);
+      const b = Math.round(180 + t * 75);
+      const a = 0.15 + t * 0.35;  // 0.15 opacity for calm, 0.5 for strong
+      windColors.push(`rgba(${r},${g},${b},${a.toFixed(2)})`);
     }
 
     async function loadWindGrid() {
@@ -1436,8 +1436,8 @@
       const west = mapBounds.getWest(), east = mapBounds.getEast();
       const south = mapBounds.getSouth(), north = mapBounds.getNorth();
 
-      windCtx.lineWidth = 1;
-      windCtx.globalAlpha = 0.8;
+      windCtx.lineWidth = 0.8;
+      windCtx.globalAlpha = 1;
 
       for (let i = 0; i < windParticles.length; i++) {
         const p = windParticles[i];
