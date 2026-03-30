@@ -4,6 +4,8 @@ Self-hosted, real-time weather radar with direct NEXRAD Level 2 station access. 
 
 **[Live Demo](https://radrview.com)** | **[Documentation](docs/README.md)** | **[Donate](https://donate.stripe.com/3cI3cv9Vpew2fhf1AUcfK00)**
 
+![RadrView](public/preview.png)
+
 ## What it does
 
 - **Hybrid radar architecture** — MRMS composite at z2-z7 (1km), NEXRAD Level 2 at z8+ (250m native resolution)
