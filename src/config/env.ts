@@ -17,4 +17,7 @@ export const config = {
   nexradEnabled: process.env.NEXRAD_ENABLED !== 'false',  // on by default
   nexradZoomMin: parseInt(process.env.NEXRAD_ZOOM_MIN || '8', 10),
   nexradStations: process.env.NEXRAD_STATIONS || 'all',
+  situationPort: parseInt(process.env.SITUATION_PORT || '8601', 10),
+  samplingZoom: parseInt(process.env.SAMPLING_ZOOM || '7', 10),
+  airportsOverridePath: process.env.AIRPORTS_OVERRIDE_PATH || '',
 } as const;

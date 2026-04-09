@@ -78,6 +78,38 @@ export function isEmptyTile(pixels: Uint8Array): boolean {
   return true;
 }
 
+export function latLonToMercator(lat: number, lon: number): { x: number; y: number } {
+  const x = lon * (EARTH_CIRCUMFERENCE / 360);
+  const latRad = lat * Math.PI / 180;
+  const y = Math.log(Math.tan(Math.PI / 4 + latRad / 2)) * (EARTH_CIRCUMFERENCE / (2 * Math.PI));
+  return { x, y };
+}
+
+export function mercatorToLatLon(x: number, y: number): { lat: number; lon: number } {
+  const lon = x / (EARTH_CIRCUMFERENCE / 360);
+  const lat = (2 * Math.atan(Math.exp(y * 2 * Math.PI / EARTH_CIRCUMFERENCE)) - Math.PI / 2) * 180 / Math.PI;
+  return { lat, lon };
+}
+
+export function haversineNm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 3440.065; // Earth radius in nautical miles
+  const φ1 = lat1 * Math.PI / 180;
+  const φ2 = lat2 * Math.PI / 180;
+  const Δφ = (lat2 - lat1) * Math.PI / 180;
+  const Δλ = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(Δφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+export function bearing(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const φ1 = lat1 * Math.PI / 180;
+  const φ2 = lat2 * Math.PI / 180;
+  const Δλ = (lon2 - lon1) * Math.PI / 180;
+  const y = Math.sin(Δλ) * Math.cos(φ2);
+  const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
+  return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+}
+
 export function parseTimestamp(key: string): { timestamp: string; epochMs: number } {
   const match = key.match(/(\d{8})-(\d{6})/);
   if (!match) throw new Error(`Cannot parse timestamp from: ${key}`);
