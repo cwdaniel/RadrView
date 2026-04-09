@@ -79,11 +79,15 @@ async function fetchLatest(redis: Redis, stationId: string): Promise<boolean> {
 
     if (latestVolume.get(stationId) === latest.Key) {
       // Data hasn't changed — refresh TTLs so keys don't expire
-      await refreshScanTTL(redis, stationId);
-      await writeStatusToRedis(redis, {
-        stationId, status: 'active', lastDataTime: fileTime, ageMinutes,
-      });
-      return false;
+      const alive = await refreshScanTTL(redis, stationId);
+      if (alive) {
+        await writeStatusToRedis(redis, {
+          stationId, status: 'active', lastDataTime: fileTime, ageMinutes,
+        });
+        return false;
+      }
+      // Scan key expired — clear latestVolume so we re-download below
+      latestVolume.delete(stationId);
     }
 
     const fileUrl = `${S3_BASE}/${latest.Key}`;
