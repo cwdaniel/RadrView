@@ -984,6 +984,12 @@
     const W_COUNT = 12000;
     const W_TRAIL = 20;
     const W_SPEED = 0.004;
+    const W_DEG2RAD = Math.PI / 180;
+    const W_INV_2PI = 1 / (2 * Math.PI);
+
+    function latToNormY(lat) {
+      return 0.5 - Math.log(Math.tan(Math.PI / 4 + lat * W_DEG2RAD / 2)) * W_INV_2PI;
+    }
 
     const windColors = [];
     for (let i = 0; i < 256; i++) {
@@ -1024,8 +1030,10 @@
       };
     }
 
+    const _w = { u: 0, v: 0 };
     function sampleW(lon, lat) {
-      if (!windGrid) return { u: 0, v: 0 };
+      _w.u = 0; _w.v = 0;
+      if (!windGrid) return _w;
       let gl = lon % 360; if (gl < 0) gl += 360;
       const xi = gl / windGrid.dx, yi = (windGrid.latMax - lat) / windGrid.dy;
       const x0 = Math.floor(xi), y0 = Math.floor(yi);
@@ -1033,64 +1041,84 @@
       const fx = xi-x0, fy = yi-y0;
       const i00 = y0*windGrid.width+x0, i10 = y0*windGrid.width+x1;
       const i01 = y1*windGrid.width+x0, i11 = y1*windGrid.width+x1;
-      return {
-        u: windGrid.u[i00]*(1-fx)*(1-fy)+windGrid.u[i10]*fx*(1-fy)+windGrid.u[i01]*(1-fx)*fy+windGrid.u[i11]*fx*fy,
-        v: windGrid.v[i00]*(1-fx)*(1-fy)+windGrid.v[i10]*fx*(1-fy)+windGrid.v[i01]*(1-fx)*fy+windGrid.v[i11]*fx*fy,
-      };
+      const w00 = (1-fx)*(1-fy), w10 = fx*(1-fy), w01 = (1-fx)*fy, w11 = fx*fy;
+      _w.u = windGrid.u[i00]*w00+windGrid.u[i10]*w10+windGrid.u[i01]*w01+windGrid.u[i11]*w11;
+      _w.v = windGrid.v[i00]*w00+windGrid.v[i10]*w10+windGrid.v[i01]*w01+windGrid.v[i11]*w11;
+      return _w;
     }
 
-    let windPaused = false;
+    const colorBins = new Array(256);
+    for (let c = 0; c < 256; c++) colorBins[c] = [];
+
     function animateWind() {
-      if (!windGrid || windPaused) return;
+      if (!windGrid) return;
       const container = document.getElementById('map');
       const rect = container.getBoundingClientRect();
-      if (windCanvas.width !== rect.width * devicePixelRatio) {
-        windCanvas.width = rect.width * devicePixelRatio;
-        windCanvas.height = rect.height * devicePixelRatio;
+      const dpr = devicePixelRatio;
+      const cw = Math.round(rect.width * dpr);
+      const ch = Math.round(rect.height * dpr);
+      if (windCanvas.width !== cw || windCanvas.height !== ch) {
+        windCanvas.width = cw;
+        windCanvas.height = ch;
         windCanvas.style.width = rect.width + 'px';
         windCanvas.style.height = rect.height + 'px';
       }
-      windCtx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+      windCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
       windCtx.clearRect(0, 0, rect.width, rect.height);
-      windCtx.lineWidth = 0.8;
+
+      // Extract map transform ONCE — then pure arithmetic for all 240K trail points
+      const center = map.getCenter();
+      const ref = map.latLngToContainerPoint(center);
+      const scale = 256 * Math.pow(2, map.getZoom());
+      const ox = ref.x - (center.lng / 360 + 0.5) * scale;
+      const oy = ref.y - latToNormY(center.lat) * scale;
+
       const b = map.getBounds();
+      const west = b.getWest(), east = b.getEast();
+      const south = b.getSouth(), north = b.getNorth();
+
+      for (let c = 0; c < 256; c++) colorBins[c].length = 0;
 
       for (let i = 0; i < windParticles.length; i++) {
         const p = windParticles[i];
         p.age++;
         if (p.age > p.maxAge || p.lat < -85 || p.lat > 85) {
-          windParticles[i] = spawnWP(); continue;
+          windParticles[i] = {
+            lon: west + Math.random() * (east - west),
+            lat: south + Math.random() * (north - south),
+            trail: [], age: 0, maxAge: 150 + Math.floor(Math.random() * 100),
+          };
+          continue;
         }
         const w = sampleW(p.lon, p.lat);
         const spd = Math.sqrt(w.u*w.u + w.v*w.v);
-        const cl = Math.cos(p.lat * Math.PI / 180);
+        const cl = Math.cos(p.lat * W_DEG2RAD);
         p.lon += (w.u * W_SPEED) / Math.max(cl, 0.1);
         p.lat += w.v * W_SPEED;
-        p.trail.push({ lon: p.lon, lat: p.lat });
+        p.trail.push({ nx: p.lon / 360 + 0.5, ny: latToNormY(p.lat) });
         if (p.trail.length > W_TRAIL) p.trail.shift();
         if (p.trail.length > 1) {
-          windCtx.strokeStyle = windColors[Math.min(255, Math.floor(spd/25*255))];
-          windCtx.beginPath();
-          const p0 = map.latLngToContainerPoint([p.trail[0].lat, p.trail[0].lon]);
-          windCtx.moveTo(p0.x, p0.y);
-          for (let t = 1; t < p.trail.length; t++) {
-            const pt = map.latLngToContainerPoint([p.trail[t].lat, p.trail[t].lon]);
-            windCtx.lineTo(pt.x, pt.y);
-          }
-          windCtx.stroke();
+          colorBins[Math.min(255, Math.floor(spd/25*255))].push(p.trail);
         }
+      }
+
+      windCtx.lineWidth = 0.8;
+      for (let c = 0; c < 256; c++) {
+        const bin = colorBins[c];
+        if (bin.length === 0) continue;
+        windCtx.strokeStyle = windColors[c];
+        windCtx.beginPath();
+        for (let j = 0; j < bin.length; j++) {
+          const trail = bin[j];
+          windCtx.moveTo(trail[0].nx * scale + ox, trail[0].ny * scale + oy);
+          for (let t = 1; t < trail.length; t++) {
+            windCtx.lineTo(trail[t].nx * scale + ox, trail[t].ny * scale + oy);
+          }
+        }
+        windCtx.stroke();
       }
       windAnimFrame = requestAnimationFrame(animateWind);
     }
-
-    map.on('movestart zoomstart', () => {
-      windPaused = true;
-      if (windAnimFrame) { cancelAnimationFrame(windAnimFrame); windAnimFrame = null; }
-    });
-    map.on('moveend zoomend', () => {
-      windPaused = false;
-      if (windGrid && !windAnimFrame) animateWind();
-    });
 
     loadWindGrid();
   </script>

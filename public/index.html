@@ -1352,21 +1352,23 @@
     let windEnabled = false;
     const PARTICLE_COUNT = 15000;
     const TRAIL_LENGTH = 25;
-    // At 60fps, 10 m/s wind should move ~10m per frame in real space.
-    // 10m = 0.00009° of latitude. So scale = 0.00009 / 10 = 0.000009 degrees per m/s per frame.
-    // But that would be invisible. Weather viz exaggerates by ~500x for visual flow.
-    // 0.000009 * 500 = 0.0045 degrees per m/s per frame
     const SPEED_SCALE = 0.004;
+    const W_DEG2RAD = Math.PI / 180;
+    const W_INV_2PI = 1 / (2 * Math.PI);
+
+    // Normalized Mercator Y (matches Leaflet's EPSG:3857 SphericalMercator)
+    function latToNormY(lat) {
+      return 0.5 - Math.log(Math.tan(Math.PI / 4 + lat * W_DEG2RAD / 2)) * W_INV_2PI;
+    }
 
     // Wind speed color LUT — subtle white-to-light-blue palette
     const windColors = [];
     for (let i = 0; i < 256; i++) {
       const t = i / 255;
-      // Calm: dim white/gray → Strong: brighter white with blue tint
       const r = Math.round(140 + t * 115);
       const g = Math.round(150 + t * 100);
       const b = Math.round(180 + t * 75);
-      const a = 0.15 + t * 0.35;  // 0.15 opacity for calm, 0.5 for strong
+      const a = 0.15 + t * 0.35;
       windColors.push(`rgba(${r},${g},${b},${a.toFixed(2)})`);
     }
 
@@ -1375,7 +1377,6 @@
         const resp = await fetch('/wind/grid');
         if (!resp.ok) return;
         const data = await resp.json();
-        // Decode base64 float arrays
         const uBuf = Uint8Array.from(atob(data.u), c => c.charCodeAt(0));
         const vBuf = Uint8Array.from(atob(data.v), c => c.charCodeAt(0));
         windGrid = {
@@ -1409,59 +1410,76 @@
       };
     }
 
+    // Reusable wind sample output (avoids 15K object allocations per frame)
+    const _wind = { u: 0, v: 0 };
     function sampleWind(lon, lat) {
-      if (!windGrid) return { u: 0, v: 0 };
-      // Convert lon to 0-360 range
+      _wind.u = 0; _wind.v = 0;
+      if (!windGrid) return _wind;
       let glon = lon % 360;
       if (glon < 0) glon += 360;
-      // Grid indices
       const xi = glon / windGrid.dx;
       const yi = (windGrid.latMax - lat) / windGrid.dy;
       const x0 = Math.floor(xi), y0 = Math.floor(yi);
       const x1 = (x0 + 1) % windGrid.width, y1 = Math.min(y0 + 1, windGrid.height - 1);
       const fx = xi - x0, fy = yi - y0;
-      // Bilinear interpolation
       const idx00 = y0 * windGrid.width + x0;
       const idx10 = y0 * windGrid.width + x1;
       const idx01 = y1 * windGrid.width + x0;
       const idx11 = y1 * windGrid.width + x1;
-      const u = windGrid.u[idx00] * (1-fx)*(1-fy) + windGrid.u[idx10] * fx*(1-fy) +
-                windGrid.u[idx01] * (1-fx)*fy + windGrid.u[idx11] * fx*fy;
-      const v = windGrid.v[idx00] * (1-fx)*(1-fy) + windGrid.v[idx10] * fx*(1-fy) +
-                windGrid.v[idx01] * (1-fx)*fy + windGrid.v[idx11] * fx*fy;
-      return { u, v };
+      const w00 = (1-fx)*(1-fy), w10 = fx*(1-fy), w01 = (1-fx)*fy, w11 = fx*fy;
+      _wind.u = windGrid.u[idx00]*w00 + windGrid.u[idx10]*w10 + windGrid.u[idx01]*w01 + windGrid.u[idx11]*w11;
+      _wind.v = windGrid.v[idx00]*w00 + windGrid.v[idx10]*w10 + windGrid.v[idx01]*w01 + windGrid.v[idx11]*w11;
+      return _wind;
     }
 
-    function animateWind() {
-      if (!windEnabled || !windCtx || !windGrid || windPaused) return;
+    // Pre-allocate color bins for batched drawing (avoids per-frame allocation)
+    const colorBins = new Array(256);
+    for (let c = 0; c < 256; c++) colorBins[c] = [];
 
-      // Resize canvas if needed
+    function animateWind() {
+      if (!windEnabled || !windCtx || !windGrid) return;
+
+      // Resize canvas only when size actually changes
       const container = document.getElementById('map');
       const rect = container.getBoundingClientRect();
-      if (windCanvas.width !== rect.width * devicePixelRatio) {
-        windCanvas.width = rect.width * devicePixelRatio;
-        windCanvas.height = rect.height * devicePixelRatio;
+      const dpr = devicePixelRatio;
+      const cw = Math.round(rect.width * dpr);
+      const ch = Math.round(rect.height * dpr);
+      if (windCanvas.width !== cw || windCanvas.height !== ch) {
+        windCanvas.width = cw;
+        windCanvas.height = ch;
         windCanvas.style.width = rect.width + 'px';
         windCanvas.style.height = rect.height + 'px';
       }
 
-      windCtx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+      windCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
       windCtx.clearRect(0, 0, rect.width, rect.height);
+
+      // Extract map transform ONCE per frame: one Leaflet call for the anchor,
+      // then pure arithmetic for all 375K trail points.
+      const center = map.getCenter();
+      const ref = map.latLngToContainerPoint(center);
+      const scale = 256 * Math.pow(2, map.getZoom());
+      const cNx = center.lng / 360 + 0.5;
+      const cNy = latToNormY(center.lat);
+      // containerX = ref.x + (nx - cNx) * scale
+      // containerY = ref.y + (ny - cNy) * scale
+      const ox = ref.x - cNx * scale;
+      const oy = ref.y - cNy * scale;
 
       const mapBounds = map.getBounds();
       const west = mapBounds.getWest(), east = mapBounds.getEast();
       const south = mapBounds.getSouth(), north = mapBounds.getNorth();
 
-      windCtx.lineWidth = 0.8;
-      windCtx.globalAlpha = 1;
+      // Clear color bins
+      for (let c = 0; c < 256; c++) colorBins[c].length = 0;
 
+      // Update particles and bin trails by color
       for (let i = 0; i < windParticles.length; i++) {
         const p = windParticles[i];
         p.age++;
 
-        // Respawn if too old or off-screen
         if (p.age > p.maxAge || p.lat < -85 || p.lat > 85) {
-          // Spawn within current viewport
           windParticles[i] = {
             lon: west + Math.random() * (east - west),
             lat: south + Math.random() * (north - south),
@@ -1472,47 +1490,45 @@
           continue;
         }
 
-        // Sample wind and move
         const wind = sampleWind(p.lon, p.lat);
         const speed = Math.sqrt(wind.u * wind.u + wind.v * wind.v);
 
-        // Move particle (scale by cos(lat) for longitude)
-        const cosLat = Math.cos(p.lat * Math.PI / 180);
+        const cosLat = Math.cos(p.lat * W_DEG2RAD);
         p.lon += (wind.u * SPEED_SCALE) / Math.max(cosLat, 0.1);
         p.lat += wind.v * SPEED_SCALE;
 
-        // Store trail in lat/lon (not screen coords — survives pan/zoom)
-        p.trail.push({ lon: p.lon, lat: p.lat, speed });
+        // Store trail in normalized Mercator (trig computed once per particle,
+        // drawing uses only multiply+add per trail point)
+        const nx = p.lon / 360 + 0.5;
+        const ny = latToNormY(p.lat);
+        p.trail.push({ nx, ny });
         if (p.trail.length > TRAIL_LENGTH) p.trail.shift();
 
-        // Draw trail by converting each point to screen coords at draw time
         if (p.trail.length > 1) {
           const colorIdx = Math.min(255, Math.floor(speed / 25 * 255));
-          windCtx.strokeStyle = windColors[colorIdx];
-          windCtx.beginPath();
-          const p0 = map.latLngToContainerPoint([p.trail[0].lat, p.trail[0].lon]);
-          windCtx.moveTo(p0.x, p0.y);
-          for (let t = 1; t < p.trail.length; t++) {
-            const pt = map.latLngToContainerPoint([p.trail[t].lat, p.trail[t].lon]);
-            windCtx.lineTo(pt.x, pt.y);
-          }
-          windCtx.stroke();
+          colorBins[colorIdx].push(p.trail);
         }
+      }
+
+      // Draw all trails batched by color — reduces stroke() calls from 15K to ~20
+      windCtx.lineWidth = 0.8;
+      for (let c = 0; c < 256; c++) {
+        const bin = colorBins[c];
+        if (bin.length === 0) continue;
+        windCtx.strokeStyle = windColors[c];
+        windCtx.beginPath();
+        for (let j = 0; j < bin.length; j++) {
+          const trail = bin[j];
+          windCtx.moveTo(trail[0].nx * scale + ox, trail[0].ny * scale + oy);
+          for (let t = 1; t < trail.length; t++) {
+            windCtx.lineTo(trail[t].nx * scale + ox, trail[t].ny * scale + oy);
+          }
+        }
+        windCtx.stroke();
       }
 
       windAnimFrame = requestAnimationFrame(animateWind);
     }
-
-    // Pause animation during map interaction to avoid jank
-    let windPaused = false;
-    map.on('movestart zoomstart', () => {
-      windPaused = true;
-      if (windAnimFrame) { cancelAnimationFrame(windAnimFrame); windAnimFrame = null; }
-    });
-    map.on('moveend zoomend', () => {
-      windPaused = false;
-      if (windEnabled && !windAnimFrame) animateWind();
-    });
 
     document.getElementById('show-wind')?.addEventListener('change', function() {
       windEnabled = this.checked;
