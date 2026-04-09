@@ -23,6 +23,14 @@ const POLL_INTERVAL_MS = 60_000;
 const latestVolume = new Map<string, string>();
 
 async function fetchLatest(redis: Redis, stationId: string): Promise<boolean> {
+  // Always refresh TTL for previously-ingested stations before attempting fetch.
+  // This keeps existing scans alive through ANY failure (S3 errors, stale data,
+  // date rollover, network issues). z8+ has no MRMS fallback — expired scans
+  // mean transparent tiles with no recovery until the next successful ingest.
+  if (latestVolume.has(stationId)) {
+    await refreshScanTTL(redis, stationId).catch(() => {});
+  }
+
   try {
     const now = new Date();
     const prefix = [

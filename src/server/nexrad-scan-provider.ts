@@ -42,13 +42,17 @@ export class NexradScanProvider {
     if (cached) return cached;
     if (this.missCache.has(stationId)) return null;
 
-    const scan = await readScanFromRedis(this.redis, stationId);
-    if (scan) {
-      this.scanCache.set(stationId, scan);
-    } else {
-      this.missCache.set(stationId, true);
+    try {
+      const scan = await readScanFromRedis(this.redis, stationId);
+      if (scan) {
+        this.scanCache.set(stationId, scan);
+      } else {
+        this.missCache.set(stationId, true);
+      }
+      return scan;
+    } catch {
+      return null;
     }
-    return scan;
   }
 
   /** Get PreparedScans for all stations covering a tile's bounds */
