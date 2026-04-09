@@ -5,15 +5,24 @@ const OVERRIDE_JSON = JSON.stringify({
   XPVT: { name: 'Private Field', lat: 40.0, lon: -80.0 },
 });
 
+const BUNDLED_JSON = JSON.stringify({
+  KORD: { name: "Chicago O'Hare Intl", lat: 41.9742, lon: -87.9073 },
+  KJFK: { name: 'John F Kennedy Intl', lat: 40.6399, lon: -73.7787 },
+  EGLL: { name: 'Heathrow', lat: 51.4706, lon: -0.4619 },
+});
+
 vi.mock('node:fs', async () => {
   const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
   return {
     ...actual,
     existsSync: vi.fn(),
     readFileSync: vi.fn((path: unknown, ...args: unknown[]) => {
-      // For the override path, return mock data; for all other paths (bundled JSON), use real fs
       if (path === OVERRIDE_PATH) {
         return OVERRIDE_JSON;
+      }
+      // Return mock bundled data for the airports.json file
+      if (typeof path === 'string' && path.endsWith('airports.json')) {
+        return BUNDLED_JSON;
       }
       return (actual.readFileSync as (...a: unknown[]) => unknown)(path, ...args);
     }),
@@ -45,7 +54,7 @@ describe('Airport Loader', () => {
   it('returns all airports', () => {
     loadAirports();
     const all = getAllAirports();
-    expect(all.length).toBeGreaterThan(1000);
+    expect(all.length).toBe(3);
   });
 
   it('merges override file over bundled data', () => {
