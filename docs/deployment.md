@@ -38,9 +38,29 @@ server {
         proxy_cache_bypass 1;
     }
 
-    # WebSocket
+    # WebSocket (main)
     location /ws {
         proxy_pass https://radrview.com;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_read_timeout 3600s;
+    }
+
+    # Aviation Situation API (separate service, port 8601)
+    location /situation/ {
+        proxy_pass http://localhost:8601;
+        proxy_set_header Host $host;
+    }
+
+    location /overlays/ {
+        proxy_pass http://localhost:8601;
+        proxy_set_header Host $host;
+    }
+
+    location /ws/aviation {
+        proxy_pass http://localhost:8601;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
@@ -155,32 +175,9 @@ Set Docker Desktop RAM allocation to at least 8 GB. For Linux production, the ho
 
 ---
 
-## GPU Upscaler (Optional)
+## GPU Upscaler (Deprecated)
 
-The upscaler container uses Real-ESRGAN with PyTorch CUDA to upscale zoom 10 tiles to zoom 11 and 12.
-
-**Requirements:**
-- NVIDIA GPU with CUDA support
-- NVIDIA Container Toolkit installed on the host
-- Docker Compose with `deploy.resources.reservations` support
-
-**Enable:**
-The `upscaler` service in `docker/docker-compose.yml` is configured but requires NVIDIA runtime:
-
-```bash
-docker compose -f docker/docker-compose.yml --profile gpu up -d upscaler
-```
-
-Or uncomment the upscaler service and run normally.
-
-**Notes:**
-- Each 4x4 tile block (1024x1024 pixels) takes approximately 9 seconds for GPU inference on an RTX-class card
-- For full CONUS coverage at zoom 11-12, a complete upscale takes ~60 minutes — upscaled tiles lag behind real-time
-- The upscaler is most useful for interactive use (on-demand viewport upscaling)
-- GPU upscaling is disabled when the upscaler service is not running; the server falls back to transparent tiles for missing zoom 11-12 tiles
-- On Docker Desktop with WSL2, Vulkan is not available inside containers. The upscaler uses the PyTorch CUDA backend instead
-
-**RTX 50xx (Blackwell) note:** Requires PyTorch 2.7+ nightly with CUDA 12.8. The upscaler Dockerfile uses `--pre torch --index-url .../nightly/cu128`.
+> **Note:** The GPU upscaler is no longer part of the default stack. Native 250 m NEXRAD Level 2 data provides full-resolution tiles at z8+ without upscaling. The upscaler code remains in the codebase but is not included in the production Docker Compose configuration.
 
 ---
 

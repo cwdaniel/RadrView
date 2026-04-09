@@ -1,6 +1,6 @@
 # RadrView Documentation
 
-RadrView is a self-hosted, real-time weather radar tile service. It ingests raw radar data from national weather services, normalizes everything to a unified dBZ scale, and serves standard XYZ map tiles with configurable color palettes, WebSocket push updates, and optional GPU-accelerated upscaling.
+RadrView is a self-hosted, real-time weather radar tile service. It ingests raw radar data from national weather services, normalizes everything to a unified dBZ scale, and serves standard XYZ map tiles with configurable color palettes and WebSocket push updates. It also provides an aviation situation API for airport weather monitoring, flight route analysis, and real-time condition alerts.
 
 ## Table of Contents
 
