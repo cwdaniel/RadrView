@@ -437,6 +437,375 @@ The WebSocket connection has no heartbeat. Clients should implement reconnection
 
 ---
 
+## Aviation Situation API
+
+The aviation situation API runs as a separate service on port `8601` and provides real-time weather intelligence for airports and flight routes. All endpoints support CORS.
+
+---
+
+### GET /situation/summary
+
+Returns a regional summary of weather conditions across all monitored regions, including affected airports and system status.
+
+**Response:** `200 application/json`
+
+```json
+{
+  "generated": "2026-04-09T05:40:00.000Z",
+  "dataAge": 44,
+  "regions": [
+    {
+      "id": "northeast-corridor",
+      "label": "Northeast Corridor",
+      "bounds": { "north": 45, "south": 38, "east": -70, "west": -79 },
+      "maxDbz": 42,
+      "coveragePct": 12.5,
+      "precipTypes": ["rain"],
+      "severity": "moderate",
+      "trend": "intensifying",
+      "affectedAirports": ["KJFK", "KEWR"]
+    }
+  ],
+  "systemStatus": "operational"
+}
+```
+
+**Regions:** Northeast Corridor, Southeast, Midwest, South Central, Mountain West, Pacific West, Western Europe, Central Europe.
+
+**`systemStatus` values:**
+
+| Value | Meaning |
+|---|---|
+| `operational` | Composite data is current |
+| `degraded` | Composite data is moderately stale |
+| `offline` | Composite data is severely stale or unavailable |
+
+**Response on no data:** `503 application/json`
+```json
+{ "error": "Summary not yet computed" }
+```
+
+**Example:**
+```
+GET /situation/summary
+```
+
+---
+
+### GET /situation/airport/:icao
+
+Returns the current weather situation for a specific airport, including ring-based radar sampling, ramp status, and trend analysis.
+
+**Path parameters:**
+
+| Parameter | Description |
+|---|---|
+| `icao` | 4-letter ICAO airport code (case-insensitive, e.g. `KORD`, `kord`) |
+
+**Response:** `200 application/json`
+
+```json
+{
+  "icao": "KORD",
+  "timestamp": "2026-04-09T05:34:56.000Z",
+  "dataAge": 44,
+  "rings": {
+    "5nm": { "maxDbz": 0, "precipTypes": [], "severity": "clear" },
+    "20nm": { "maxDbz": 35, "precipTypes": [], "severity": "moderate" },
+    "50nm": { "maxDbz": 44, "precipTypes": [], "severity": "moderate" }
+  },
+  "trend": "steady",
+  "rampStatus": "clear",
+  "nearestActiveCell": {
+    "distanceNm": 19.3,
+    "bearing": 308,
+    "dbz": 35
+  }
+}
+```
+
+**Ring radii:** 5 nm (airfield), 20 nm (terminal area), 50 nm (approach/departure corridors).
+
+**`severity` values:**
+
+| Value | dBZ Range |
+|---|---|
+| `clear` | < 20 |
+| `light` | 20–34 |
+| `moderate` | 35–49 |
+| `heavy` | 50–59 |
+| `extreme` | 60+ |
+
+**`rampStatus` values:**
+
+| Value | Meaning |
+|---|---|
+| `clear` | No ramp restrictions expected |
+| `caution` | Freezing precip nearby or moderate dBZ on airfield |
+| `suspend` | Hail detected or heavy dBZ on airfield |
+
+**`trend` values:**
+
+| Value | Meaning |
+|---|---|
+| `intensifying` | 50nm max dBZ increasing significantly |
+| `weakening` | 50nm max dBZ decreasing significantly |
+| `steady` | No significant change |
+| `developing` | Was clear, now has activity |
+| `clearing` | Activity dissipating to clear |
+| `unknown` | No prior frame to compare |
+
+**`nearestActiveCell`** is `null` when no active cells are within 50 nm. `bearing` is degrees true (0 = north, 90 = east).
+
+**Response on unknown airport:** `404 application/json`
+```json
+{ "error": "Airport not found: ZZZZ" }
+```
+
+**Example:**
+```
+GET /situation/airport/KORD
+GET /situation/airport/EGLL
+```
+
+---
+
+### GET /situation/airport/:icao/history
+
+Returns time-series history frames for a watched airport. History is only available for airports actively subscribed via WebSocket.
+
+**Path parameters:**
+
+| Parameter | Description |
+|---|---|
+| `icao` | 4-letter ICAO airport code (case-insensitive) |
+
+**Query parameters:**
+
+| Parameter | Default | Description |
+|---|---|---|
+| `hours` | `3` | Number of hours of history to return (1–24) |
+
+**Response:** `200 application/json`
+
+```json
+{
+  "icao": "KORD",
+  "hours": 3,
+  "frames": [
+    {
+      "timestamp": "2026-04-09T03:30:00.000Z",
+      "rings": {
+        "5nm": { "maxDbz": 0, "precipTypes": [], "severity": "clear" },
+        "20nm": { "maxDbz": 22, "precipTypes": ["rain"], "severity": "light" },
+        "50nm": { "maxDbz": 38, "precipTypes": ["rain"], "severity": "moderate" }
+      },
+      "rampStatus": "clear"
+    }
+  ]
+}
+```
+
+**Response when airport is not watched:** `404 application/json`
+```json
+{ "error": "Airport KORD is not on the watchlist. History is only available for watched airports." }
+```
+
+**Example:**
+```
+GET /situation/airport/KORD/history?hours=6
+```
+
+---
+
+### GET /situation/route
+
+Samples radar data along a multi-waypoint flight route and returns per-segment weather analysis with severity and recommendations.
+
+**Query parameters:**
+
+| Parameter | Description |
+|---|---|
+| `waypoints` | Comma-separated ICAO codes (minimum 2, case-insensitive). e.g. `KORD,KJFK` |
+
+**Response:** `200 application/json`
+
+```json
+{
+  "waypoints": ["KORD", "KJFK"],
+  "timestamp": "2026-04-09T05:34:56.000Z",
+  "segments": [
+    {
+      "from": "KORD",
+      "to": "KJFK",
+      "distanceNm": 634,
+      "maxDbzAlongRoute": 42,
+      "significantCells": 2,
+      "severity": "moderate",
+      "recommendation": "deviations possible",
+      "samplePoints": [
+        { "lat": 41.97, "lon": -87.91, "distanceNm": 0, "maxDbz": 0, "severity": "clear" },
+        { "lat": 42.15, "lon": -86.82, "distanceNm": 50, "maxDbz": 35, "severity": "moderate" }
+      ]
+    }
+  ]
+}
+```
+
+Route is sampled every 50 nm with a 3x3 pixel neighborhood for max dBZ.
+
+**`recommendation` values:**
+
+| Value | Meaning |
+|---|---|
+| `clear` | No weather concerns |
+| `monitor` | Weather present, monitor conditions |
+| `deviations possible` | May need to deviate from planned route |
+| `deviations likely` | Deviations expected |
+| `avoid segment` | Severe weather, avoid this segment |
+
+**Response on validation error:** `400 application/json`
+```json
+{ "error": "At least 2 waypoints required" }
+```
+```json
+{ "error": "Unknown airports: ZZZZ" }
+```
+
+**Example:**
+```
+GET /situation/route?waypoints=KORD,KDFW,KMIA
+GET /situation/route?waypoints=EGLL,EDDF
+```
+
+---
+
+### GET /overlays/cells.geojson
+
+Returns detected storm cells as a GeoJSON FeatureCollection for map overlay rendering.
+
+**Query parameters:**
+
+| Parameter | Default | Description |
+|---|---|---|
+| `threshold` | `35` | Minimum dBZ to consider a cell (integer) |
+| `bounds` | *(none)* | Geographic filter: `north,south,east,west` (decimal degrees) |
+
+**Response:** `200 application/json` — GeoJSON FeatureCollection with cell polygon features.
+
+Each feature's properties include:
+
+| Property | Description |
+|---|---|
+| `maxDbz` | Peak reflectivity in the cell |
+| `severity` | Severity classification |
+| `precipType` | Dominant precipitation type |
+| `areaKm2` | Approximate cell area in km² |
+
+**Example:**
+```
+GET /overlays/cells.geojson
+GET /overlays/cells.geojson?threshold=45&bounds=45,38,-70,-79
+```
+
+---
+
+### WebSocket /ws/aviation
+
+Real-time aviation weather alerts for watched airports. Connects to the situation API service on port `8601`.
+
+**Connection:**
+```
+wss://radrview.com/ws/aviation
+```
+
+**Subscribe (client → server):**
+
+```json
+{
+  "type": "subscribe",
+  "clientId": "my-app-123",
+  "watchlist": ["KORD", "KJFK", "KATL"],
+  "thresholds": {
+    "dbz": 20,
+    "precipTypes": []
+  }
+}
+```
+
+ICAO codes are normalized to uppercase. Only valid ICAO codes are accepted; unknown codes are silently dropped. Airports on the watchlist are sampled on each new composite frame and their history is retained for up to 24 hours.
+
+**Incoming messages (server → client):**
+
+**`condition-change`** — ramp status or severity changed at a watched airport:
+
+```json
+{
+  "type": "condition-change",
+  "icao": "KORD",
+  "timestamp": "2026-04-09T05:40:00.000Z",
+  "previous": { "severity": "clear", "rampStatus": "clear" },
+  "current": { "severity": "moderate", "rampStatus": "caution" },
+  "trend": "developing"
+}
+```
+
+Messages are filtered by the client's `thresholds.dbz` — changes below the threshold are suppressed.
+
+**`all-clear`** — conditions returned to clear at a watched airport:
+
+```json
+{
+  "type": "all-clear",
+  "icao": "KORD",
+  "timestamp": "2026-04-09T06:15:00.000Z",
+  "rampStatus": "clear"
+}
+```
+
+**`data-stale`** — composite data has not updated within the expected interval:
+
+```json
+{
+  "type": "data-stale",
+  "ageSeconds": 420,
+  "affectedSources": ["mrms"]
+}
+```
+
+**Example (browser):**
+```javascript
+const ws = new WebSocket('wss://radrview.com/ws/aviation');
+
+ws.onopen = () => {
+  ws.send(JSON.stringify({
+    type: 'subscribe',
+    clientId: 'dispatch-board',
+    watchlist: ['KORD', 'KJFK', 'KATL', 'KDFW'],
+    thresholds: { dbz: 20, precipTypes: [] }
+  }));
+};
+
+ws.onmessage = (event) => {
+  const msg = JSON.parse(event.data);
+  switch (msg.type) {
+    case 'condition-change':
+      console.log(`${msg.icao}: ${msg.previous.rampStatus} → ${msg.current.rampStatus}`);
+      break;
+    case 'all-clear':
+      console.log(`${msg.icao}: all clear`);
+      break;
+    case 'data-stale':
+      console.warn(`Data stale: ${msg.ageSeconds}s`);
+      break;
+  }
+};
+```
+
+The server sends periodic pings (30s interval). Clients that fail to respond are disconnected.
+
+---
+
 ## Tile URL Pattern
 
 For use with mapping libraries (Leaflet, MapLibre, OpenLayers):
