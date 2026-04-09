@@ -23,6 +23,7 @@ Returns a colorized 256x256 PNG radar tile.
 |---|---|---|
 | `palette` | `default` | Color palette name. See [Palettes](palettes.md) for available names. |
 | `source` | `composite` | Data source name. See [Sources](sources.md) or `GET /sources`. |
+| `layer` | `reflectivity` | NEXRAD data layer at z8+. One of `reflectivity`, `biological`, `velocity`. Ignored below z8. |
 
 **Response:** `200 image/png` — a 256x256 RGBA PNG tile.
 
@@ -434,6 +435,43 @@ ws.onmessage = (event) => {
 ```
 
 The WebSocket connection has no heartbeat. Clients should implement reconnection logic.
+
+---
+
+## GET /wind/grid
+
+Returns the current GFS 10m wind field as a global grid. Data is refreshed every 6 hours from NOAA NOMADS.
+
+**Response:** `200 application/json`
+
+```json
+{
+  "u": "<base64-encoded Float32Array>",
+  "v": "<base64-encoded Float32Array>",
+  "width": 1440,
+  "height": 721,
+  "lonMin": 0,
+  "lonMax": 359.75,
+  "latMin": -90,
+  "latMax": 90,
+  "dx": 0.25,
+  "dy": 0.25,
+  "timestamp": 1742651400000,
+  "cycle": "20260322/00z"
+}
+```
+
+`u` and `v` are east-west and north-south wind components in m/s, encoded as base64 Float32Arrays (~8 MB total). The grid is row-major with (0,0) at lat -90, lon 0. The frontend uses these to animate wind flow particles on a Canvas overlay.
+
+**Response on no data:** `503 application/json`
+```json
+{ "error": "Wind data not yet available" }
+```
+
+**Example:**
+```
+GET /wind/grid
+```
 
 ---
 

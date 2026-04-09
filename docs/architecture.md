@@ -307,3 +307,78 @@ The server subscribes to Redis `new-frame` pub/sub and broadcasts each message t
 Clients use `new-frame` to know when to request new tiles. Clients use `sweep-wedge` to progressively render a rotating sweep line and wedge on a Canvas overlay as the scan proceeds.
 
 The frontend shows station markers color-coded by status: green = active (fresh data), orange = stale, red = unavailable. Hovering a marker shows the data age tooltip.
+
+## NEXRAD Layers
+
+NEXRAD Level 2 data provides three distinct layers from the same volume scan, selectable via the `?layer=` query parameter on tile requests:
+
+### Reflectivity (default)
+
+Base reflectivity (dBZ) filtered by RhoHV ≥ 0.95. Gates that fail the correlation coefficient check are treated as NoData (non-meteorological returns removed).
+
+### Biological
+
+Returns with RhoHV between 0.3 and 0.95 — birds, insects, bats, and other non-meteorological targets. These are stored in a separate `bioGatePixels` array during parsing and rendered with the `biological` palette (blue → orange, dBZ -5 to 35).
+
+### Velocity
+
+Doppler radial velocity from the VEL moment. Encoded as pixel values 1-255 mapping to -63.5 to +63.5 m/s (128 = zero velocity). Rendered with the `velocity` palette (green = toward radar, gray = zero, red = away).
+
+## Wind Flow Visualization
+
+Global wind data is served from GFS (Global Forecast System) model output:
+
+1. The wind fetcher (`wind/fetcher.ts`) downloads 10m U and V wind components from NOAA NOMADS every 6 hours
+2. GRIB2 data is extracted via `gdal_translate` into a 721×1440 Float32 grid (0.25° global resolution)
+3. The `GET /wind/grid` endpoint returns the U/V arrays as base64-encoded Float32Arrays (~8 MB)
+4. The frontend animates particles along wind streamlines using a Canvas overlay
+
+The wind grid is independent of the radar pipeline — it serves forecast model data, not observed radar data.
+
+## Aviation Situation API
+
+The situation API is a separate Express service (port 8601) that provides real-time weather intelligence for airports and flight routes. It subscribes to Redis `new-frame` events and processes each new composite frame.
+
+### Data Flow
+
+```
+new-frame event (Redis pub/sub)
+    ↓
+syncWatchlist() — sync WebSocket subscriptions to Redis set
+    ↓
+processNewFrame() — for each watched airport:
+    ├─ RingSampler: sample 5nm / 20nm / 50nm rings around airport
+    ├─ computeRampStatus(): clear / caution / suspend
+    ├─ computeTrend(): compare with previous frame
+    ├─ HistoryManager: append frame to time-series
+    └─ Detect condition changes → broadcast via WebSocket
+    ↓
+RegionSummary — analyze 8 pre-defined regions (NE Corridor, SE, Midwest, etc.)
+    ↓
+Cache all results in Redis (situation:airport:{icao}, situation:summary)
+```
+
+### Components
+
+| Component | File | Purpose |
+|---|---|---|
+| WatchlistUpdater | `situation/workers/watchlist-updater.ts` | Orchestrates per-frame airport analysis |
+| RingSampler | `situation/sampling/ring-sampler.ts` | Samples dBZ in concentric rings (5/20/50 nm) |
+| RouteSampler | `situation/sampling/route-sampler.ts` | Samples dBZ along flight routes (50 nm intervals) |
+| CellDetector | `situation/sampling/cell-detector.ts` | Detects storm cells as GeoJSON polygons |
+| TileReader | `situation/sampling/tile-reader.ts` | Reads grayscale tiles from MBTiles and decodes to dBZ |
+| HistoryManager | `situation/analysis/history.ts` | Manages per-airport time-series in Redis |
+| SummaryAnalyzer | `situation/analysis/summary.ts` | Computes regional weather summaries |
+| AviationWebSocketHandler | `situation/ws/aviation.ts` | Manages client subscriptions and broadcasts |
+| Airport loader | `situation/config/airports.ts` | Loads bundled + override airport database |
+
+### Redis Keys
+
+| Key | Type | Contents |
+|---|---|---|
+| `situation:watchlist` | Set | ICAO codes of actively watched airports |
+| `situation:airport:{icao}` | String | Cached JSON `AirportSituation` |
+| `situation:previous:{icao}` | String | Previous frame's 50nm max dBZ (for trend) |
+| `situation:history:{icao}` | Sorted Set | Time-series frames (score = epochMs) |
+| `situation:summary` | String | Cached JSON regional summary |
+| `situation:cells:{threshold}` | String | Cached GeoJSON cell polygons (300s TTL) |

@@ -11,6 +11,23 @@
 | `dwd` | DWD Germany | Germany + neighbors (45.6°N-56.3°N, 1.4°E-18.8°E) | HDF5 via HTTPS | 250 m | ~5 minutes | `eu` |
 | `nexrad/{stationId}` | NEXRAD Level 2 (WSR-88D) | Per-station, CONUS + territories (z8+) | Level 2 binary via S3 | 250 m gate spacing | ~5–10 minutes (archive); real-time sweep for ~7 stations with chunk data | `na` |
 
+## Supporting Data Sources
+
+| Source ID | Name | Coverage | Format | Resolution | Update Interval |
+|---|---|---|---|---|---|
+| (wind) | GFS 10m Wind | Global | GRIB2 via NOMADS | 0.25° (~28 km) | 6 hours |
+
+### GFS Wind (NOAA NOMADS)
+
+- **Products:** UGRD (U component) + VGRD (V component) at 10m above ground
+- **Data URL:** `https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25.pl`
+- **Grid:** 721 × 1440 points (lat -90 to 90, lon 0 to 359.75)
+- **Format:** GRIB2, extracted via `gdal_translate` to raw Float32 arrays
+- **Refresh:** Every 6 hours, tries recent GFS cycles (00z, 06z, 12z, 18z) going back up to 2 days
+- **Endpoint:** `GET /wind/grid` returns base64-encoded U/V arrays
+- **Licensing:** Public domain (NOAA/US government)
+- **Notes:** Wind data is independent of the radar pipeline. It serves forecast model data for the frontend particle animation overlay, not observed radar data.
+
 ## Composite Sources (Derived)
 
 These are automatically produced by the compositor from the individual sources above.

@@ -76,6 +76,40 @@ Stops from 5 dBZ (68, 1, 84 — dark purple) to 70 dBZ (253, 180, 37 — golden 
 
 Raw dBZ intensity as grayscale. Only two stops — linear from -10 dBZ (10, 10, 10) to 80 dBZ (255, 255, 255). Useful for debugging or as a base for custom rendering. All stops are fully opaque.
 
+### biological
+
+Designed for NEXRAD dual-pol biological detection (birds, insects, bats). Uses the `?layer=biological` tile parameter, which filters gates by RhoHV between 0.3 and 0.95. Color progression from dark blue (weak returns) to orange (strong returns), with semi-transparent rendering.
+
+| dBZ | Color (RGBA) | Visual |
+|---|---|---|
+| -5 | (60, 60, 180, 120) | Dark blue |
+| 0 | (80, 100, 220, 160) | Medium blue |
+| 5 | (100, 140, 255, 190) | Light blue |
+| 10 | (120, 200, 255, 210) | Cyan |
+| 15 | (140, 255, 220, 230) | Light cyan |
+| 20 | (200, 255, 140, 240) | Yellow-green |
+| 25 | (255, 255, 100, 250) | Yellow |
+| 30 | (255, 200, 60, 255) | Orange |
+| 35 | (255, 140, 40, 255) | Red-orange |
+
+### velocity
+
+Doppler radial velocity palette for NEXRAD. Uses the `?layer=velocity` tile parameter. Green shades represent motion toward the radar, red shades represent motion away, and gray is zero velocity. Uses a `"value"` encoding (raw pixel values 1-255) instead of dBZ stops.
+
+| Pixel Value | Velocity (m/s) | Color (RGBA) | Visual |
+|---|---|---|---|
+| 1 | -63.5 | (0, 180, 0, 255) | Dark green (toward) |
+| 32 | -48 | (0, 255, 0, 255) | Bright green |
+| 64 | -32 | (0, 200, 100, 255) | Cyan-green |
+| 96 | -16 | (100, 255, 200, 220) | Light cyan |
+| 120 | -4 | (180, 240, 220, 180) | Pale blue |
+| 128 | 0 | (128, 128, 128, 100) | Gray (zero) |
+| 136 | +4 | (220, 240, 180, 180) | Pale yellow |
+| 160 | +16 | (255, 200, 100, 220) | Orange |
+| 192 | +32 | (255, 100, 0, 255) | Orange-red |
+| 224 | +48 | (255, 0, 0, 255) | Red (away) |
+| 255 | +63.5 | (180, 0, 0, 255) | Dark red |
+
 ### precip-type
 
 A typed palette that uses both the dBZ tile and the corresponding `-type` tile to select a precipitation-type-specific color scheme. This palette is handled differently from standard palettes — see below.

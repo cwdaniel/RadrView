@@ -50,6 +50,7 @@ This starts the following containers:
 | `radrview-compositor` | Multi-source tile merger |
 | `radrview-cleanup` | Data retention pruning |
 | `radrview-server` | HTTP tile server + WebSocket |
+| `radrview-situation-api` | Aviation weather intelligence API + WebSocket |
 
 ### 4. Open the viewer
 
@@ -92,10 +93,10 @@ curl "https://radrview.com/frames?source=composite&limit=5"
 docker compose -f docker/docker-compose.yml down
 ```
 
-Tile data is stored in `./data/` (a bind mount, not a Docker volume). It persists across restarts. To clear all data:
+Tile data is stored in a named Docker volume (`radrview-data`). It persists across restarts. To clear all data:
 
 ```bash
-rm -rf data/
+docker volume rm radrview-data
 ```
 
 ## Next Steps

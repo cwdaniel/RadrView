@@ -28,6 +28,14 @@ All services read from the same set of environment variables (set in `docker-com
 - Ingesting all 159 stations at full resolution requires more CPU and storage than the MRMS path. Start with a regional subset using `NEXRAD_STATIONS` if resources are constrained.
 - Real-time sweep display is automatic for any station that publishes to `unidata-nexrad-level2-chunks`. No additional configuration is required.
 
+## Situation API Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `SITUATION_PORT` | `8601` | HTTP port the aviation situation API listens on. |
+| `SAMPLING_ZOOM` | `7` | Tile zoom level used for ring/route/cell sampling. Higher values increase resolution but cost more CPU. |
+| `AIRPORTS_OVERRIDE_PATH` | *(none)* | Path to a JSON file of custom airport overrides, merged on top of the bundled 2,900+ airport database. |
+
 ## MRMS-Specific Variables
 
 The MRMS ingester (`dist/ingest/mrms.js`) reads two additional variables:
@@ -114,6 +122,19 @@ environment:
   - NEXRAD_ZOOM_MIN=8
   - NEXRAD_STATIONS=all       # or e.g. KLOT,KIWX,KGRR
 ```
+
+### Situation API (`situation-api`)
+
+```yaml
+environment:
+  - REDIS_URL=redis://redis:6379
+  - DATA_DIR=/data
+  - SITUATION_PORT=8601
+  - SAMPLING_ZOOM=7
+  - LOG_LEVEL=info
+```
+
+The situation API runs as a separate Express server and is routed via Traefik at `/situation`, `/overlays`, and `/ws/aviation` path prefixes. The bundled airport database (`data/airports.json`) is generated at Docker build time from OurAirports data.
 
 ## Enabling and Disabling Sources
 
