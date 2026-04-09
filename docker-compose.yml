@@ -289,6 +289,33 @@ services:
     depends_on:
       - redis
 
+  situation-api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: radrview-situation-api
+    command: ["node", "dist/situation/index.js"]
+    restart: unless-stopped
+    volumes:
+      - radrview-data:/data
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - DATA_DIR=/data
+      - SITUATION_PORT=8601
+      - SAMPLING_ZOOM=7
+      - LOG_LEVEL=info
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.situation.rule: "PathPrefix(`/situation`) || PathPrefix(`/overlays`) || PathPrefix(`/ws/aviation`)"
+      traefik.http.routers.situation.entrypoints: "web"
+      traefik.http.services.situation.loadbalancer.server.port: "8601"
+      traefik.docker.network: "proxy"
+    networks:
+      - proxy
+      - internal
+    depends_on:
+      - redis
+
 volumes:
   radrview-data:
     driver: local
