@@ -27,8 +27,16 @@ if (isMainModule) {
 
   const syncWatchlist = async () => {
     const wsAirports = wsHandler.getWatchedAirports();
+    const currentWatchlist = await updater.getWatchlist();
+
+    const activeSet = new Set(wsAirports);
+    const stale = currentWatchlist.filter(icao => !activeSet.has(icao));
+
     if (wsAirports.length > 0) {
       await updater.addToWatchlist(wsAirports);
+    }
+    if (stale.length > 0) {
+      await updater.removeFromWatchlist(stale);
     }
   };
 

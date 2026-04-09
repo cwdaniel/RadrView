@@ -1,6 +1,6 @@
 import type { Airport, RouteSegment, SamplePoint } from '../types.js';
 import { dbzToSeverity, dbzToRecommendation } from '../analysis/severity.js';
-import { TileReader } from './tile-reader.js';
+import { TileReader, type TileDbzData } from './tile-reader.js';
 import {
   haversineNm,
   latLonToMercator,
@@ -86,28 +86,72 @@ export class RouteSampler {
     lat: number, lon: number, source: string, zoom: number, timestamp?: string,
   ): Promise<number> {
     const merc = latLonToMercator(lat, lon);
-    const tiles = getTilesForBounds(zoom, merc.x, merc.y, merc.x, merc.y);
-    if (tiles.length === 0) return 0;
+    const centerTiles = getTilesForBounds(zoom, merc.x, merc.y, merc.x, merc.y);
+    if (centerTiles.length === 0) return 0;
 
-    const tile = tiles[0];
-    const dbzData = await this.reader.readTileDbz(source, tile.z, tile.x, tile.y, timestamp);
-    if (!dbzData) return 0;
+    const centerTile = centerTiles[0];
+    const centerData = await this.reader.readTileDbz(source, centerTile.z, centerTile.x, centerTile.y, timestamp);
+    if (!centerData) return 0;
 
-    const mercBounds = tileToMercatorBounds(tile.z, tile.x, tile.y);
-    const pixelW = (mercBounds.east - mercBounds.west) / dbzData.width;
-    const pixelH = (mercBounds.north - mercBounds.south) / dbzData.height;
+    const centerBounds = tileToMercatorBounds(centerTile.z, centerTile.x, centerTile.y);
+    const pixelW = (centerBounds.east - centerBounds.west) / centerData.width;
+    const pixelH = (centerBounds.north - centerBounds.south) / centerData.height;
 
-    const px = Math.floor((merc.x - mercBounds.west) / pixelW);
-    const py = Math.floor((mercBounds.north - merc.y) / pixelH);
+    const px = Math.floor((merc.x - centerBounds.west) / pixelW);
+    const py = Math.floor((centerBounds.north - merc.y) / pixelH);
+
+    // Fast path: all neighbors fit within the center tile
+    if (px - NEIGHBORHOOD_RADIUS >= 0 && px + NEIGHBORHOOD_RADIUS < centerData.width &&
+        py - NEIGHBORHOOD_RADIUS >= 0 && py + NEIGHBORHOOD_RADIUS < centerData.height) {
+      let maxDbz = 0;
+      for (let dy = -NEIGHBORHOOD_RADIUS; dy <= NEIGHBORHOOD_RADIUS; dy++) {
+        for (let dx = -NEIGHBORHOOD_RADIUS; dx <= NEIGHBORHOOD_RADIUS; dx++) {
+          const dbz = centerData.dbzValues[(py + dy) * centerData.width + (px + dx)];
+          if (!isNaN(dbz) && dbz > maxDbz) maxDbz = dbz;
+        }
+      }
+      return maxDbz;
+    }
+
+    // Slow path: neighborhood crosses tile boundary — load adjacent tiles
+    const expandX = NEIGHBORHOOD_RADIUS * pixelW;
+    const expandY = NEIGHBORHOOD_RADIUS * pixelH;
+    const allTiles = getTilesForBounds(
+      zoom, merc.x - expandX, merc.y + expandY, merc.x + expandX, merc.y - expandY,
+    );
+
+    type TileEntry = { data: TileDbzData; bounds: ReturnType<typeof tileToMercatorBounds> };
+    const tileMap = new Map<string, TileEntry>();
+    const centerKey = `${centerTile.z}/${centerTile.x}/${centerTile.y}`;
+    tileMap.set(centerKey, { data: centerData, bounds: centerBounds });
+
+    for (const t of allTiles) {
+      const key = `${t.z}/${t.x}/${t.y}`;
+      if (tileMap.has(key)) continue;
+      const data = await this.reader.readTileDbz(source, t.z, t.x, t.y, timestamp);
+      if (data) {
+        tileMap.set(key, { data, bounds: tileToMercatorBounds(t.z, t.x, t.y) });
+      }
+    }
 
     let maxDbz = 0;
     for (let dy = -NEIGHBORHOOD_RADIUS; dy <= NEIGHBORHOOD_RADIUS; dy++) {
       for (let dx = -NEIGHBORHOOD_RADIUS; dx <= NEIGHBORHOOD_RADIUS; dx++) {
-        const nx = px + dx;
-        const ny = py + dy;
-        if (nx < 0 || nx >= dbzData.width || ny < 0 || ny >= dbzData.height) continue;
-        const dbz = dbzData.dbzValues[ny * dbzData.width + nx];
-        if (!isNaN(dbz) && dbz > maxDbz) maxDbz = dbz;
+        const sampleX = merc.x + dx * pixelW;
+        const sampleY = merc.y - dy * pixelH;
+
+        for (const [, entry] of tileMap) {
+          if (sampleX >= entry.bounds.west && sampleX < entry.bounds.east &&
+              sampleY <= entry.bounds.north && sampleY > entry.bounds.south) {
+            const tpx = Math.floor((sampleX - entry.bounds.west) / pixelW);
+            const tpy = Math.floor((entry.bounds.north - sampleY) / pixelH);
+            if (tpx >= 0 && tpx < entry.data.width && tpy >= 0 && tpy < entry.data.height) {
+              const dbz = entry.data.dbzValues[tpy * entry.data.width + tpx];
+              if (!isNaN(dbz) && dbz > maxDbz) maxDbz = dbz;
+            }
+            break;
+          }
+        }
       }
     }
     return maxDbz;

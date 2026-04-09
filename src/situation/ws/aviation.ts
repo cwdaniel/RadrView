@@ -39,7 +39,9 @@ export class AviationWebSocketHandler {
 
         if (msg.type === 'subscribe') {
           clientId = msg.clientId;
-          const validIcaos = (msg.watchlist || []).filter((icao: string) => getAirport(icao));
+          const validIcaos = (msg.watchlist || [])
+            .map((icao: string) => icao.toUpperCase())
+            .filter((icao: string) => getAirport(icao));
 
           const subscription: Subscription = {
             clientId: msg.clientId,
