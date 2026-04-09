@@ -29,11 +29,15 @@ RUN pnpm install --frozen-lockfile \
 # Copy source and build
 COPY tsconfig.json ./
 COPY src/ ./src/
+COPY scripts/ ./scripts/
 COPY palettes/ ./palettes/
 COPY data/ ./data/
 COPY public/ ./public/
 COPY landing/ ./landing/
 COPY docs/ ./docs/
 RUN pnpm build
+
+# Generate bundled airports data
+RUN pnpm tsx scripts/generate-airports.ts
 
 CMD ["node", "dist/server/index.js"]
