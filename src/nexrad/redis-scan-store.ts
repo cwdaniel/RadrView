@@ -89,10 +89,12 @@ export async function writeStatusToRedis(redis: Redis, status: RedisStationStatu
   await redis.expire(key, SCAN_TTL);
 }
 
-/** Refresh TTL on scan and status keys without rewriting data (called when data hasn't changed) */
-export async function refreshScanTTL(redis: Redis, stationId: string): Promise<void> {
-  await redis.expire(SCAN_KEY_PREFIX + stationId, SCAN_TTL);
+/** Refresh TTL on scan and status keys without rewriting data (called when data hasn't changed).
+ *  Returns true if the scan key still exists, false if it has expired. */
+export async function refreshScanTTL(redis: Redis, stationId: string): Promise<boolean> {
+  const scanAlive = await redis.expire(SCAN_KEY_PREFIX + stationId, SCAN_TTL);
   await redis.expire(STATUS_KEY_PREFIX + stationId, SCAN_TTL);
+  return scanAlive === 1;
 }
 
 /** Read a PreparedScan from Redis (called by the server process) */
