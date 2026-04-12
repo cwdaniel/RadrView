@@ -241,6 +241,8 @@ if (isMainModule) {
 
   wss.on('connection', (ws) => {
     logger.info({ clients: wss.clients.size }, 'WebSocket client connected');
+    (ws as any).alive = true;
+    ws.on('pong', () => { (ws as any).alive = true; });
     if (nexradWsHandler) {
       nexradWsHandler.addClient(ws);
     }
@@ -248,6 +250,19 @@ if (isMainModule) {
       logger.debug({ clients: wss.clients.size }, 'WebSocket client disconnected');
     });
   });
+
+  // Ping all clients every 30s to keep connections alive through Cloudflare
+  // (100s idle timeout) and detect dead connections
+  const pingInterval = setInterval(() => {
+    for (const ws of wss.clients) {
+      if (!(ws as any).alive) {
+        ws.terminate();
+        continue;
+      }
+      (ws as any).alive = false;
+      ws.ping();
+    }
+  }, 30_000);
 
   // Subscribe to new-frame events from compositor and broadcast to all WS clients
   subscriber.subscribe('new-frame');
@@ -261,6 +276,7 @@ if (isMainModule) {
 
   const shutdown = async () => {
     logger.info('SIGTERM received, shutting down server');
+    clearInterval(pingInterval);
     wss.close();
     httpServer.close();
     subscriber.disconnect();

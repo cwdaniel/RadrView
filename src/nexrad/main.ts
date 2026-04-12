@@ -19,6 +19,7 @@ const logger = createLogger('nexrad-ingester');
 
 const S3_BASE = 'https://unidata-nexrad-level2.s3.amazonaws.com';
 const POLL_INTERVAL_MS = 60_000;
+const FETCH_LATEST_TIMEOUT_MS = 45_000; // Hard timeout per station — kills any hung operation
 
 const latestVolume = new Map<string, string>();
 
@@ -41,9 +42,9 @@ async function fetchLatest(redis: Redis, stationId: string): Promise<boolean> {
     ].join('/') + '/';
 
     const listUrl = `${S3_BASE}/?list-type=2&prefix=${encodeURIComponent(prefix)}`;
-    const listResp = await fetch(listUrl, { signal: AbortSignal.timeout(10000) });
+    const listResp = await fetch(listUrl, { signal: AbortSignal.timeout(15000) });
     if (!listResp.ok) return false;
-    const xml = await listResp.text();
+    const xml = await listResp.text();  // covered by same AbortSignal — aborts body read too
     const parser = new XMLParser({ processEntities: false });
     const parsed = parser.parse(xml);
     const result = parsed?.ListBucketResult;
@@ -91,9 +92,10 @@ async function fetchLatest(redis: Redis, stationId: string): Promise<boolean> {
     }
 
     const fileUrl = `${S3_BASE}/${latest.Key}`;
-    const fileResp = await fetch(fileUrl, { signal: AbortSignal.timeout(30000) });
+    const dlSignal = AbortSignal.timeout(30000);
+    const fileResp = await fetch(fileUrl, { signal: dlSignal });
     if (!fileResp.ok) return false;
-    const buf = Buffer.from(await fileResp.arrayBuffer());
+    const buf = Buffer.from(await fileResp.arrayBuffer());  // covered by same dlSignal
 
     const scan = parseLevel2Reflectivity(buf);
     if (!scan) return false;
@@ -114,29 +116,61 @@ async function fetchLatest(redis: Redis, stationId: string): Promise<boolean> {
 
     logger.debug({ stationId, radials: scan.radials.length, ageMinutes }, 'Station scan updated');
     return true;
-  } catch (err) {
-    logger.debug({ err, stationId }, 'Failed to fetch station');
+  } catch (err: any) {
+    const isTimeout = err?.name === 'TimeoutError' || err?.name === 'AbortError' || err?.message?.includes('timed out');
+    if (isTimeout) {
+      logger.warn({ stationId, err: err?.message }, 'Station fetch timeout (S3 or Redis stall)');
+    } else {
+      logger.debug({ err, stationId }, 'Failed to fetch station');
+    }
     return false;
   }
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('operation timed out')), ms);
+    promise.then(
+      v => { clearTimeout(timer); resolve(v); },
+      e => { clearTimeout(timer); reject(e); },
+    );
+  });
 }
 
 async function pollAllStations(redis: Redis, stationIds: string[]): Promise<void> {
   const BATCH = 10;
   let updated = 0;
+  let timedOut = 0;
+  let failed = 0;
   for (let i = 0; i < stationIds.length; i += BATCH) {
     const batch = stationIds.slice(i, i + BATCH);
-    const results = await Promise.allSettled(batch.map(id => fetchLatest(redis, id)));
-    for (const r of results) {
-      if (r.status === 'fulfilled' && r.value) updated++;
+    const results = await Promise.allSettled(
+      batch.map(id => withTimeout(fetchLatest(redis, id), FETCH_LATEST_TIMEOUT_MS)),
+    );
+    for (let j = 0; j < results.length; j++) {
+      const r = results[j];
+      if (r.status === 'fulfilled' && r.value) {
+        updated++;
+      } else if (r.status === 'rejected') {
+        const stationId = batch[j];
+        const isTimeout = r.reason?.message === 'operation timed out';
+        if (isTimeout) {
+          timedOut++;
+          logger.warn({ stationId }, 'Station fetch timed out (hung operation killed)');
+        } else {
+          failed++;
+          logger.warn({ stationId, err: r.reason }, 'Station fetch failed');
+        }
+      }
     }
   }
-  if (updated > 0) {
-    logger.info({ updated, total: stationIds.length }, 'NEXRAD poll cycle complete');
-  }
+  logger.info({
+    updated, timedOut, failed, total: stationIds.length,
+  }, 'NEXRAD poll cycle complete');
 }
 
 async function main() {
-  const redis = new Redis(config.redisUrl);
+  const redis = new Redis(config.redisUrl, { commandTimeout: 10_000 });
   const stationIds = config.nexradStations === 'all'
     ? getAllStations().map(s => s.id)
     : config.nexradStations.split(',').map(s => s.trim());
