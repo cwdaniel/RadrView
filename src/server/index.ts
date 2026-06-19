@@ -14,6 +14,7 @@ import { createMetricsRouter, recordCacheHit, recordCacheMiss, recordServeDurati
 import { createWindRouter } from './wind.js';
 import { startWindFetcher } from '../wind/fetcher.js';
 import { createNexradTileHandler } from './nexrad-tile.js';
+import { readTileWithOverzoom, type TileReader } from './overzoom.js';
 import { NexradScanProvider } from './nexrad-scan-provider.js';
 import { getAllStations } from '../nexrad/stations.js';
 import { ChunkPoller } from '../nexrad/chunk-poller.js';
@@ -149,7 +150,15 @@ export function createApp(
     }
 
     const tileStore = getTileStore();
-    const grayscalePng = await tileStore.readTile(source, timestamp, parseInt(z), parseInt(x), parseInt(y));
+    const readTile: TileReader = (s, t, zz, xx, yy) => tileStore.readTile(s, t, zz, xx, yy);
+
+    // Composite tiles are only generated up to the native max zoom. Above
+    // nexradZoomMin, where NEXRAD has no coverage, upscale the nearest lower-zoom
+    // composite tile instead of returning a blank tile. Below that threshold the
+    // exact read is kept to avoid extra work on global low-zoom (mostly-ocean) tiles.
+    const grayscalePng = zoomNum >= config.nexradZoomMin
+      ? await readTileWithOverzoom(readTile, source, timestamp, zoomNum, parseInt(x), parseInt(y), config.zoomMin)
+      : await tileStore.readTile(source, timestamp, zoomNum, parseInt(x), parseInt(y));
 
     if (!grayscalePng) {
       res.setHeader('Content-Type', 'image/png');
@@ -164,7 +173,9 @@ export function createApp(
     if (isTypedPalette(paletteName)) {
       // For typed palettes (e.g. precip-type), also read the type tile from {source}-type
       const typeSource = `${source}-type`;
-      const typePng = await tileStore.readTile(typeSource, timestamp, parseInt(z), parseInt(x), parseInt(y));
+      const typePng = zoomNum >= config.nexradZoomMin
+        ? await readTileWithOverzoom(readTile, typeSource, timestamp, zoomNum, parseInt(x), parseInt(y), config.zoomMin)
+        : await tileStore.readTile(typeSource, timestamp, zoomNum, parseInt(x), parseInt(y));
       if (typePng) {
         colorized = await colorizePrecipType(grayscalePng, typePng);
       } else {

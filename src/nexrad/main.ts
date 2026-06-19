@@ -9,10 +9,10 @@
 import { XMLParser } from 'fast-xml-parser';
 import { Redis } from 'ioredis';
 import { createLogger } from '../utils/logger.js';
-import { getAllStations, getStation } from './stations.js';
-import { parseLevel2Reflectivity } from './parser.js';
-import { projectScan } from './projector.js';
+import { getAllStations } from './stations.js';
+import type { PreparedScan } from './projector.js';
 import { writeScanToRedis, writeStatusToRedis, refreshScanTTL } from './redis-scan-store.js';
+import { runWithTimeout } from './cpu-worker.js';
 import { config } from '../config/env.js';
 
 const logger = createLogger('nexrad-ingester');
@@ -20,6 +20,8 @@ const logger = createLogger('nexrad-ingester');
 const S3_BASE = 'https://unidata-nexrad-level2.s3.amazonaws.com';
 const POLL_INTERVAL_MS = 60_000;
 const FETCH_LATEST_TIMEOUT_MS = 45_000; // Hard timeout per station — kills any hung operation
+const PARSE_TIMEOUT_MS = 20_000; // Hard cap on parse+projection — terminate()s a worker wedged on a corrupt volume
+const PARSE_WORKER_URL = new URL('./parse-worker.js', import.meta.url);
 
 const latestVolume = new Map<string, string>();
 
@@ -97,24 +99,29 @@ async function fetchLatest(redis: Redis, stationId: string): Promise<boolean> {
     if (!fileResp.ok) return false;
     const buf = Buffer.from(await fileResp.arrayBuffer());  // covered by same dlSignal
 
-    const scan = parseLevel2Reflectivity(buf);
-    if (!scan) return false;
-
-    const station = getStation(stationId);
-    if (!station) return false;
-
-    const projected = projectScan(station, scan);
+    // Parse + project in a worker thread with a hard timeout. A corrupt volume
+    // can drive the parser into a runaway synchronous loop; terminate()ing the
+    // worker is the only thing that can stop that without wedging this process.
+    const parseResult = await runWithTimeout<{ ok: boolean; projected?: PreparedScan }>(
+      PARSE_WORKER_URL, { buf, stationId }, PARSE_TIMEOUT_MS,
+    );
+    if (!parseResult) {
+      logger.warn({ stationId }, 'Parse/projection timed out or crashed (likely corrupt volume) — skipped');
+      return false;
+    }
+    if (!parseResult.ok || !parseResult.projected) return false;
+    const projected = parseResult.projected;
 
     // Write to Redis for the server to read
     await writeScanToRedis(redis, projected);
     await writeStatusToRedis(redis, {
-      stationId, status: 'active', lastDataTime: scan.timestamp,
-      ageMinutes: Math.round((Date.now() - scan.timestamp) / 60000),
+      stationId, status: 'active', lastDataTime: projected.timestamp,
+      ageMinutes: Math.round((Date.now() - projected.timestamp) / 60000),
     });
 
     latestVolume.set(stationId, latest.Key);
 
-    logger.debug({ stationId, radials: scan.radials.length, ageMinutes }, 'Station scan updated');
+    logger.debug({ stationId, radials: projected.count, ageMinutes }, 'Station scan updated');
     return true;
   } catch (err: any) {
     const isTimeout = err?.name === 'TimeoutError' || err?.name === 'AbortError' || err?.message?.includes('timed out');
