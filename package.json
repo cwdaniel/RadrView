@@ -29,11 +29,6 @@
     "sharp": "^0.34.0",
     "ws": "^8.19.0"
   },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "better-sqlite3"
-    ]
-  },
   "devDependencies": {
     "@types/amqplib": "^0.10.8",
     "@types/better-sqlite3": "^7.6.13",

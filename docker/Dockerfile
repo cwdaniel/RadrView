@@ -20,11 +20,9 @@ WORKDIR /app
 RUN corepack enable && corepack prepare pnpm@latest --activate
 
 # Install dependencies
-COPY package.json pnpm-lock.yaml ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY .npmrc ./
-RUN pnpm install --frozen-lockfile \
-    && cd /app/node_modules/.pnpm/better-sqlite3@*/node_modules/better-sqlite3 \
-    && npx --yes node-gyp rebuild
+RUN pnpm install --frozen-lockfile
 
 # Copy source and build
 COPY tsconfig.json ./
