@@ -153,6 +153,11 @@ services:
       - "8600:8600"
     volumes:
       - radrview-data:/data
+      # Self-hosted basemap (BASEMAP=pmtiles): copy the archive into the data
+      # volume, e.g. `docker cp basemap.pmtiles radrview-server:/data/`, or
+      # mount a read-only file produced by scripts/download-basemap.sh:
+      # - ./basemap.pmtiles:/data/basemap.pmtiles:ro
+      # - ./basemap-assets:/data/basemap-assets:ro
     environment:
       - REDIS_URL=redis://redis:6379
       - DATA_DIR=/data
@@ -161,6 +166,11 @@ services:
       - NEXRAD_ENABLED=true
       - NEXRAD_STATIONS=all
       - NEXRAD_ZOOM_MIN=8
+      # Basemap: openfreemap (default, keyless) | pmtiles (self-hosted) | custom
+      - BASEMAP=openfreemap
+      # - BASEMAP_PMTILES_PATH=/data/basemap.pmtiles
+      # - BASEMAP_ASSETS_DIR=/data/basemap-assets
+      # - BASEMAP_STYLE_URL=https://example.com/style.json
     restart: unless-stopped
     depends_on:
       - redis

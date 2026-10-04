@@ -351,6 +351,43 @@ GET /nexrad/stations
 
 ---
 
+## GET /config.json
+
+Runtime configuration for the web UI (currently just the basemap). Fetched by
+`public/index.html` and `landing/index.html` on load. Not cached
+(`Cache-Control: no-cache`).
+
+**Response:**
+
+```json
+{
+  "basemap": {
+    "mode": "openfreemap",
+    "styleUrl": "https://tiles.openfreemap.org/styles/dark",
+    "attribution": "<a href=\"https://openfreemap.org\">OpenFreeMap</a> &copy; ..."
+  }
+}
+```
+
+| Field | Description |
+|---|---|
+| `mode` | `openfreemap`, `pmtiles`, or `custom` (see [Configuration → Basemap](configuration.md#basemap)) |
+| `styleUrl` | MapLibre style JSON URL (`openfreemap`, `custom`) |
+| `pmtilesUrl` | `/basemap/tiles.pmtiles?v=<mtime>` — the self-hosted archive, served with HTTP Range support (`pmtiles`). The `v` query is the file's modification time, so caches of Range responses are busted when the archive is replaced. |
+| `glyphsUrl`, `spriteUrl` | Font and sprite locations for the Protomaps style (`pmtiles`); local `/basemap/assets/...` when mirrored |
+| `attribution` | HTML attribution the client must display. Empty for `custom`, in which case the client shows the style's own source attribution. |
+| `fallbackReason` | Present when the configured mode could not be honoured (e.g. missing `.pmtiles` file) and OpenFreeMap is used instead |
+
+### GET /basemap/tiles.pmtiles
+
+Only in `pmtiles` mode (404 otherwise). Supports `Range` requests (206/416),
+`Accept-Ranges: bytes`, ETag/Last-Modified, `Cache-Control: public, max-age=86400`.
+
+### GET /basemap/assets/*
+
+Locally mirrored Protomaps fonts (`fonts/{fontstack}/{range}.pbf`) and sprites
+(`sprites/v4/dark[@2x].{json,png}`) when `BASEMAP_ASSETS_DIR` exists.
+
 ## WebSocket /ws
 
 Connect to receive real-time notifications when new radar frames are available and to stream NEXRAD real-time sweep data.

@@ -28,6 +28,35 @@ All services read from the same set of environment variables (set in `docker-com
 - Ingesting all 159 stations at full resolution requires more CPU and storage than the MRMS path. Start with a regional subset using `NEXRAD_STATIONS` if resources are constrained.
 - Real-time sweep display is automatic for any station that publishes to `unidata-nexrad-level2-chunks`. No additional configuration is required.
 
+## Basemap
+
+The web UI's map background is configured at runtime through the server (the
+pages fetch `GET /config.json` on load), so changing these variables only needs
+a restart of the `server` service. Every mode is keyless.
+
+| Variable | Default | Description |
+|---|---|---|
+| `BASEMAP` | `openfreemap` | `openfreemap` — [OpenFreeMap](https://openfreemap.org) dark vector style (free, no key, no limits). `pmtiles` — self-hosted [Protomaps](https://protomaps.com) archive served by RadrView. `custom` — your own MapLibre style JSON. |
+| `BASEMAP_PMTILES_PATH` | `$DATA_DIR/basemap.pmtiles` | Path to the `.pmtiles` archive for `BASEMAP=pmtiles`. Served at `/basemap/tiles.pmtiles` with HTTP Range support. |
+| `BASEMAP_ASSETS_DIR` | `$DATA_DIR/basemap-assets` | Optional local mirror of the Protomaps fonts and sprites (`scripts/download-basemap.sh --assets`). When present they are served from `/basemap/assets/`; otherwise glyphs and sprites load from `protomaps.github.io`. |
+| `BASEMAP_STYLE_URL` | *(none)* | MapLibre style JSON URL for `BASEMAP=custom`. |
+
+**Notes:**
+- If `BASEMAP=pmtiles` but the archive is missing, the server logs a warning and
+  `/config.json` reports `mode: "openfreemap"` with a `fallbackReason`, so the
+  map is never blank.
+- If the page cannot reach `/config.json` at all it also falls back to OpenFreeMap.
+- Browsers without WebGL (some VMs, RDP sessions, GPU-blocklisted drivers) cannot run
+  MapLibre. The loader detects this and falls back to darkened OpenStreetMap raster
+  tiles (still keyless) with a console warning; in that degraded mode labels render
+  under the radar.
+- The style's label (`symbol`) layers are rendered in a separate MapLibre layer
+  above the radar tiles, so labels stay legible on top of heavy reflectivity in
+  every mode. See `public/basemap.js`.
+- Required attribution is shown in the map corner automatically: OpenFreeMap /
+  OpenMapTiles / OpenStreetMap for `openfreemap`, Protomaps / OpenStreetMap for
+  `pmtiles`. For `custom` the style's own source attribution is used.
+
 ## Situation API Variables
 
 | Variable | Default | Description |
@@ -99,6 +128,10 @@ environment:
   - DATA_DIR=/data
   - PORT=8600
   - LOG_LEVEL=info
+  - BASEMAP=openfreemap            # or pmtiles / custom — see "Basemap" above
+  # - BASEMAP_PMTILES_PATH=/data/basemap.pmtiles
+  # - BASEMAP_ASSETS_DIR=/data/basemap-assets
+  # - BASEMAP_STYLE_URL=https://example.com/style.json
 ```
 
 ### Cleanup (`cleanup`)

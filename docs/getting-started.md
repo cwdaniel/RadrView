@@ -25,6 +25,8 @@ cp .env.example .env
 
 The defaults work out of the box. Edit `.env` if you need to change the port or storage path. See [Configuration](configuration.md) for all options.
 
+The map background defaults to the keyless [OpenFreeMap](https://openfreemap.org) dark style — nothing to sign up for. To serve the basemap yourself instead, see [Deployment → Self-Hosted Basemap](deployment.md#self-hosted-basemap-pmtiles).
+
 ### 3. Start all services
 
 ```bash

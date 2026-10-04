@@ -20,4 +20,10 @@ export const config = {
   situationPort: parseInt(process.env.SITUATION_PORT || '8601', 10),
   samplingZoom: parseInt(process.env.SAMPLING_ZOOM || '7', 10),
   airportsOverridePath: process.env.AIRPORTS_OVERRIDE_PATH || '',
+  // Basemap for the web frontends. All modes are keyless; see src/server/basemap.ts.
+  //   openfreemap (default) | pmtiles (self-hosted Protomaps archive) | custom (BASEMAP_STYLE_URL)
+  basemap: process.env.BASEMAP || 'openfreemap',
+  basemapPmtilesPath: process.env.BASEMAP_PMTILES_PATH || `${process.env.DATA_DIR || './data'}/basemap.pmtiles`,
+  basemapAssetsDir: process.env.BASEMAP_ASSETS_DIR || `${process.env.DATA_DIR || './data'}/basemap-assets`,
+  basemapStyleUrl: process.env.BASEMAP_STYLE_URL || '',
 } as const;
