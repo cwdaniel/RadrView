@@ -133,6 +133,73 @@ To clear all stored tiles: `rm -rf /mnt/radar-data`
 
 The cleanup worker prunes tiles older than `RETENTION_HOURS` (default: 24). Adjust based on your storage budget.
 
+### Self-Hosted Basemap (PMTiles)
+
+By default the viewer loads its dark basemap from OpenFreeMap, which needs no
+key and has no request limits. If you want the whole deployment to make zero
+third-party requests (air-gapped, privacy, or just independence), serve a
+Protomaps archive from RadrView itself.
+
+**1. Build the archive** with the `pmtiles` CLI
+([releases](https://github.com/protomaps/go-pmtiles/releases), or the Docker image
+`protomaps/go-pmtiles`, which the script uses automatically):
+
+```bash
+scripts/download-basemap.sh                         # planet, z0-10, ./data/basemap.pmtiles
+scripts/download-basemap.sh --bbox=-130,20,-60,55   # CONUS only
+scripts/download-basemap.sh --maxzoom 12 --assets   # street-level labels + local fonts/sprites
+```
+
+Approximate sizes (Protomaps build 2026-10-02):
+
+| Extract | `--maxzoom 8` | `--maxzoom 10` | `--maxzoom 12` |
+|---|---|---|---|
+| Planet | ~560 MB | ~3.8 GB | ~18 GB |
+| CONUS (`-130,20,-60,55`) | — | ~540 MB | ~2.6 GB |
+
+NEXRAD detail starts at z8 and vector tiles overzoom cleanly, so z10 is a good
+default; choose z12 only if you want local roads and small towns under close-up
+NEXRAD. `--assets` additionally mirrors the Protomaps fonts and sprites (~20 MB)
+so glyphs do not load from `protomaps.github.io`.
+
+**2. Put the files in the data volume** of the `server` container:
+
+```bash
+docker cp data/basemap.pmtiles radrview-server:/data/basemap.pmtiles
+docker cp data/basemap-assets  radrview-server:/data/        # if you used --assets
+```
+
+or mount them read-only (see the commented example on the `server` service in
+`docker/docker-compose.yml`).
+
+**3. Enable it** with `BASEMAP=pmtiles` on the `server` service and restart it.
+Confirm with:
+
+```bash
+curl -s http://localhost:8600/config.json
+# {"basemap":{"mode":"pmtiles","pmtilesUrl":"/basemap/tiles.pmtiles", ...}}
+```
+
+If the archive is missing the server logs a warning and the response carries a
+`fallbackReason` while the map falls back to OpenFreeMap.
+
+**Reverse proxy notes:** the browser reads the archive with many small HTTP
+Range requests. Make sure your proxy passes `Range` headers through and caches
+206 responses (nginx does by default; Cloudflare serves ranges from cache once
+the object has been fetched in full). Add a location for it next to `/tile/`:
+
+```nginx
+    location /basemap/ {
+        proxy_pass https://radrview.com;
+        proxy_set_header Host $host;
+        proxy_cache radar_cache;
+        proxy_cache_valid 200 206 1d;
+    }
+```
+
+Refresh the archive occasionally (Protomaps publishes a new planet build daily);
+simply replace the file — the server re-reads it on the next request.
+
 ---
 
 ## Resource Estimates

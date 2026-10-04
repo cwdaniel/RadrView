@@ -24,6 +24,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" />
   <style>
     :root {
       --bg: #0d0f12;
@@ -246,7 +247,23 @@
     }
     .leaflet-control-zoom-in { border-bottom: 1px solid var(--border) !important; }
     .leaflet-control-zoom-out { border-bottom: none !important; }
-    .leaflet-control-attribution { display: none !important; }
+    /* Attribution: required by OpenStreetMap / basemap licences — keep visible, style for dark UI */
+    .leaflet-control-attribution {
+      background: rgba(13, 15, 18, 0.75) !important;
+      color: var(--text-3) !important;
+      font-family: var(--font-sans, inherit);
+      font-size: 10px !important;
+      line-height: 1.4;
+      padding: 2px 6px !important;
+      margin: 0 !important;
+      border-radius: 4px 0 0 0;
+      max-width: calc(100vw - 32px);
+    }
+    .leaflet-control-attribution a { color: var(--text-2) !important; text-decoration: none; }
+    .leaflet-control-attribution a:hover { color: var(--text) !important; text-decoration: underline; }
+    .leaflet-control-attribution .leaflet-attribution-flag { display: none !important; }
+    /* MapLibre canvases inside Leaflet panes: never intercept map interaction */
+    .leaflet-gl-layer, .leaflet-gl-layer canvas { pointer-events: none; }
     .leaflet-bar { box-shadow: 0 2px 8px rgba(0,0,0,0.4) !important; }
 
     /* Map legend overlay */
@@ -800,6 +817,9 @@
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
+  <script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.1.4/leaflet-maplibre-gl.js"></script>
+  <script src="/app/basemap.js"></script>
   <script>
     'use strict';
 
@@ -836,22 +856,15 @@
     const map = L.map('map', { zoomControl: false }).setView([42, -95], 5);
     L.control.zoom({ position: 'topleft' }).addTo(map);
 
-    // Dark base layer (no labels)
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
-      attribution: '&copy; OSM &copy; CARTO',
-      subdomains: 'abcd',
-      maxZoom: 19,
-    }).addTo(map);
-
-    // RadrView radar layer will be inserted here (between base and labels)
-    // Labels layer on top
-    const labelsLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', {
-      attribution: '',
-      subdomains: 'abcd',
-      maxZoom: 19,
-      pane: 'overlayPane',
+    // Keyless vector basemap (OpenFreeMap by default, or self-hosted PMTiles),
+    // rendered by MapLibre inside Leaflet. The base layers go in tilePane under
+    // the radar tiles; the style's label (symbol) layers are rendered by a second
+    // GL layer in a pane above the radar so labels stay readable. Mode and
+    // attribution come from GET /config.json — see public/basemap.js.
+    map.attributionControl.setPrefix(false);
+    RadrBasemap.attach(map).then(bm => {
+      if (!bm) console.warn('Basemap unavailable; radar layers still work on the dark background.');
     });
-    labelsLayer.addTo(map);
 
     // Build map legend bar from dBZ colors
     (function buildLegendBar() {

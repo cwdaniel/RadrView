@@ -30,6 +30,28 @@ docker compose -f docker/docker-compose.yml up -d
 
 Open **https://radrview.com** (or `http://localhost:8600` for local dev) — radar data appears within 60 seconds. NEXRAD Level 2 data loads within 5 minutes.
 
+## Basemap
+
+The map background is keyless too. By default the viewer renders the
+[OpenFreeMap](https://openfreemap.org) dark vector style (free, no key, no
+registration, no request limits) with MapLibre GL inside the Leaflet map, and
+draws the map labels *above* the radar so place names stay readable.
+
+For a fully self-hosted deployment with zero third-party requests, set
+`BASEMAP=pmtiles` and serve a [Protomaps](https://protomaps.com) archive from
+RadrView itself:
+
+```bash
+scripts/download-basemap.sh --maxzoom 10 --assets   # planet z0-10 ~3.8 GB (CONUS-only ~540 MB)
+docker cp data/basemap.pmtiles radrview-server:/data/
+docker cp data/basemap-assets  radrview-server:/data/
+# then set BASEMAP=pmtiles on the server service and restart it
+```
+
+Any MapLibre style JSON can also be used with `BASEMAP=custom` and
+`BASEMAP_STYLE_URL`. See [Configuration](docs/configuration.md#basemap) and
+[Deployment](docs/deployment.md#self-hosted-basemap-pmtiles).
+
 ## Architecture
 
 ```
@@ -51,6 +73,7 @@ GET /frames/latest?source=composite
 GET /nexrad/stations
 GET /wind/grid
 GET /health
+GET /config.json
 WS  /ws → { type: "new-frame" | "sweep-wedge" }
 ```
 

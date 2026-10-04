@@ -24,6 +24,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" />
   <style>
     /* ── Reset & base ───────────────────────────────────────── */
     *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
@@ -160,13 +161,17 @@
     }
     .leaflet-container { background: #0d0d1a !important; }
 
-    /* Leaflet dark tiles attribution fix */
+    /* Attribution: required by OpenStreetMap / basemap licences — styled for the dark UI */
     .leaflet-control-attribution {
       background: rgba(13, 13, 30, 0.75) !important;
-      color: #555 !important;
+      color: #666 !important;
       font-size: 10px !important;
+      max-width: calc(100vw - 32px);
     }
-    .leaflet-control-attribution a { color: #555 !important; }
+    .leaflet-control-attribution a { color: #8b90a0 !important; text-decoration: none; }
+    .leaflet-control-attribution a:hover { color: #d1d5de !important; text-decoration: underline; }
+    .leaflet-control-attribution .leaflet-attribution-flag { display: none !important; }
+    .leaflet-gl-layer, .leaflet-gl-layer canvas { pointer-events: none; }
 
     /* Hero overlay panel — top-left */
     #hero-panel {
@@ -835,6 +840,9 @@
   </footer>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
+  <script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.1.4/leaflet-maplibre-gl.js"></script>
+  <script src="/app/basemap.js"></script>
   <script>
     // ── Configuration ─────────────────────────────────────────
     const DEMO_API = '';
@@ -852,11 +860,10 @@
 
     L.control.zoom({ position: 'bottomright' }).addTo(map);
 
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
-      subdomains: 'abcd',
-      maxZoom: 19,
-    }).addTo(map);
+    // Keyless vector basemap (OpenFreeMap by default, or self-hosted PMTiles).
+    // Shared loader with the app: /app/basemap.js. Labels render above the radar.
+    map.attributionControl.setPrefix(false);
+    RadrBasemap.attach(map);
 
     // ── Radar layer ───────────────────────────────────────────
     let radarLayer = null;

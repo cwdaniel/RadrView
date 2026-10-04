@@ -20,6 +20,7 @@ import { getAllStations } from '../nexrad/stations.js';
 import { ChunkPoller } from '../nexrad/chunk-poller.js';
 import { SweepManager } from '../nexrad/sweep-manager.js';
 import { NexradWebSocketHandler } from './nexrad-ws.js';
+import { createBasemapRouter } from './basemap.js';
 
 const logger = createLogger('server');
 
@@ -55,6 +56,15 @@ export function createApp(
   // Load palettes
   const palettesDir = path.join(process.cwd(), 'palettes');
   loadPalettes(palettesDir);
+
+  // Runtime client config (basemap mode) + self-hosted basemap files.
+  // Mounted before the static directories so /config.json is never shadowed.
+  app.use(createBasemapRouter({
+    mode: config.basemap,
+    pmtilesPath: config.basemapPmtilesPath,
+    assetsDir: config.basemapAssetsDir,
+    styleUrl: config.basemapStyleUrl,
+  }));
 
   // Serve radar viewer at /app
   const publicDir = path.join(process.cwd(), 'public');
