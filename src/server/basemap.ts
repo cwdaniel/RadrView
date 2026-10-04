@@ -78,11 +78,13 @@ function openFreeMap(fallbackReason?: string): BasemapClientConfig {
   return cfg;
 }
 
-function isReadableFile(p: string): boolean {
+/** Modification time (ms) of a regular file, or null if it does not exist. */
+function fileMtimeMs(p: string): number | null {
   try {
-    return fs.statSync(p).isFile();
+    const st = fs.statSync(p);
+    return st.isFile() ? Math.floor(st.mtimeMs) : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -106,7 +108,8 @@ export function resolveBasemapConfig(env: BasemapEnv): BasemapClientConfig {
       return openFreeMap();
 
     case 'pmtiles': {
-      if (!isReadableFile(env.pmtilesPath)) {
+      const mtime = fileMtimeMs(env.pmtilesPath);
+      if (mtime === null) {
         return openFreeMap(
           `BASEMAP=pmtiles but no file at ${env.pmtilesPath}; run scripts/download-basemap.sh`,
         );
@@ -115,7 +118,10 @@ export function resolveBasemapConfig(env: BasemapEnv): BasemapClientConfig {
       const assetsBase = localAssets ? ASSETS_ROUTE : PROTOMAPS_ASSETS_REMOTE;
       return {
         mode: 'pmtiles',
-        pmtilesUrl: PMTILES_ROUTE,
+        // Versioned by mtime so browser/proxy caches of Range responses are
+        // busted when the archive is replaced in place (the route itself is
+        // cached for a day). /config.json is uncached, so a reload picks it up.
+        pmtilesUrl: `${PMTILES_ROUTE}?v=${mtime}`,
         glyphsUrl: `${assetsBase}/fonts/{fontstack}/{range}.pbf`,
         spriteUrl: `${assetsBase}/sprites/v4/dark`,
         attribution: PROTOMAPS_ATTRIBUTION,

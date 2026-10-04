@@ -47,7 +47,7 @@ describe('resolveBasemapConfig', () => {
     fs.writeFileSync(file, Buffer.alloc(16, 1));
     const cfg = resolveBasemapConfig(envWith({ mode: 'pmtiles', pmtilesPath: file }));
     expect(cfg.mode).toBe('pmtiles');
-    expect(cfg.pmtilesUrl).toBe('/basemap/tiles.pmtiles');
+    expect(cfg.pmtilesUrl).toMatch(/^\/basemap\/tiles\.pmtiles\?v=\d+$/);
     expect(cfg.attribution).toMatch(/Protomaps/);
     expect(cfg.attribution).toMatch(/OpenStreetMap/);
     // No local assets dir: glyphs/sprites fall back to the public Protomaps assets
@@ -65,6 +65,24 @@ describe('resolveBasemapConfig', () => {
     const cfg = resolveBasemapConfig(envWith({ mode: 'pmtiles', pmtilesPath: file, assetsDir: assets }));
     expect(cfg.glyphsUrl).toBe('/basemap/assets/fonts/{fontstack}/{range}.pbf');
     expect(cfg.spriteUrl).toBe('/basemap/assets/sprites/v4/dark');
+  });
+
+  it('changes the versioned pmtiles URL when the archive is replaced', () => {
+    const dir = makeTempDir();
+    const file = path.join(dir, 'basemap.pmtiles');
+    fs.writeFileSync(file, Buffer.alloc(16, 1));
+    const t0 = new Date('2026-01-01T00:00:00Z');
+    fs.utimesSync(file, t0, t0);
+    const before = resolveBasemapConfig(envWith({ mode: 'pmtiles', pmtilesPath: file })).pmtilesUrl;
+
+    fs.writeFileSync(file, Buffer.alloc(16, 2));
+    const t1 = new Date('2026-06-01T00:00:00Z');
+    fs.utimesSync(file, t1, t1);
+    const after = resolveBasemapConfig(envWith({ mode: 'pmtiles', pmtilesPath: file })).pmtilesUrl;
+
+    expect(before).toBe(`/basemap/tiles.pmtiles?v=${t0.getTime()}`);
+    expect(after).toBe(`/basemap/tiles.pmtiles?v=${t1.getTime()}`);
+    expect(after).not.toBe(before);
   });
 
   it('falls back to OpenFreeMap when the pmtiles file is missing', () => {

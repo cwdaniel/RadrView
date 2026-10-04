@@ -198,7 +198,10 @@ the object has been fetched in full). Add a location for it next to `/tile/`:
 ```
 
 Refresh the archive occasionally (Protomaps publishes a new planet build daily);
-simply replace the file — the server re-reads it on the next request.
+simply replace the file — the server re-reads it on the next request, and the
+archive URL handed out by `/config.json` carries the file's modification time as
+a cache-busting query, so already-cached Range responses are not mixed with the
+new file. Tabs that were open during the swap pick up the new URL on reload.
 
 ---
 

@@ -373,9 +373,9 @@ Runtime configuration for the web UI (currently just the basemap). Fetched by
 |---|---|
 | `mode` | `openfreemap`, `pmtiles`, or `custom` (see [Configuration → Basemap](configuration.md#basemap)) |
 | `styleUrl` | MapLibre style JSON URL (`openfreemap`, `custom`) |
-| `pmtilesUrl` | `/basemap/tiles.pmtiles` — the self-hosted archive, served with HTTP Range support (`pmtiles`) |
+| `pmtilesUrl` | `/basemap/tiles.pmtiles?v=<mtime>` — the self-hosted archive, served with HTTP Range support (`pmtiles`). The `v` query is the file's modification time, so caches of Range responses are busted when the archive is replaced. |
 | `glyphsUrl`, `spriteUrl` | Font and sprite locations for the Protomaps style (`pmtiles`); local `/basemap/assets/...` when mirrored |
-| `attribution` | HTML attribution the client must display |
+| `attribution` | HTML attribution the client must display. Empty for `custom`, in which case the client shows the style's own source attribution. |
 | `fallbackReason` | Present when the configured mode could not be honoured (e.g. missing `.pmtiles` file) and OpenFreeMap is used instead |
 
 ### GET /basemap/tiles.pmtiles

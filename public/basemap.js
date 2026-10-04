@@ -110,9 +110,19 @@
     var res = await fetch(cfg.styleUrl);
     if (!res.ok) throw new Error('style HTTP ' + res.status + ' for ' + cfg.styleUrl);
     var style = await res.json();
-    // Styles may use relative sprite/glyph URLs; resolve against the style URL.
+    // Once a style is passed to MapLibre as an object it has no base URL, so
+    // any relative sprite/glyph/source URLs would resolve against this page.
+    // Resolve them against the style URL instead.
     if (typeof style.sprite === 'string') style.sprite = resolveStyleUrl(style.sprite, cfg.styleUrl);
     if (typeof style.glyphs === 'string') style.glyphs = resolveStyleUrl(style.glyphs, cfg.styleUrl);
+    Object.keys(style.sources || {}).forEach(function (k) {
+      var src = style.sources[k];
+      if (!src) return;
+      if (typeof src.url === 'string') src.url = resolveStyleUrl(src.url, cfg.styleUrl);
+      if (Array.isArray(src.tiles)) {
+        src.tiles = src.tiles.map(function (t) { return typeof t === 'string' ? resolveStyleUrl(t, cfg.styleUrl) : t; });
+      }
+    });
     return style;
   }
 
@@ -260,12 +270,17 @@
     var baseLayer = null;
     var labelsLayer = null;
     try {
-      baseLayer = L.maplibreGL(Object.assign({}, common, {
+      var baseOpts = Object.assign({}, common, {
         style: parts.base,
         pane: 'tilePane',
         className: 'basemap-gl-base',
-        attributionControl: { customAttribution: cfg.attribution || '' },
-      })).addTo(map);
+      });
+      // The plugin uses `attributionControl.customAttribution` verbatim when
+      // the option is set, and only collects the style's own source
+      // attribution when it is absent. Custom styles ship their own credits,
+      // so only override when the server supplied text (openfreemap/pmtiles).
+      if (cfg.attribution) baseOpts.attributionControl = { customAttribution: cfg.attribution };
+      baseLayer = L.maplibreGL(baseOpts).addTo(map);
 
       if (wantLabels && parts.labels.layers.length) {
         ensureLabelsPane(map);
