@@ -259,8 +259,12 @@ services:
   redis:
     container_name: radrview-redis
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
+    # Not published to the host: every service reaches it on the compose
+    # network at redis://redis:6379, and the image runs without a password.
+    # For local development against processes running on the host, add a
+    # loopback-only mapping in an override file (see docs/configuration.md):
+    #   ports:
+    #     - "127.0.0.1:6379:6379"
     volumes:
       - redis-data:/data
     command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
