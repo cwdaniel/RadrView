@@ -102,6 +102,17 @@ To maximize cache hit rate with Cloudflare:
 
 Legend images (`/palette/*/legend`) are served with `max-age=86400, immutable` and can be cached indefinitely.
 
+### Redis Exposure
+
+Redis is reachable only inside the compose network (`redis://redis:6379`); the
+compose file deliberately publishes no host port for it because the container
+runs without authentication. Keep it that way in production. If you need to
+inspect it, exec into the container instead of opening a port:
+
+```bash
+docker exec -it radrview-redis redis-cli
+```
+
 ### Redis Persistence
 
 The default Redis configuration in `docker/docker-compose.yml` uses:
